@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The domain model. Deliberately has no dependencies at all. -->
+
+</Project>
