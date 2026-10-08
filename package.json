@@ -9,7 +9,7 @@
     "db:up": "docker compose up -d sqlserver",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d sqlserver",
-    "api": "dotnet run --project apps/api",
+    "api": "dotnet run --project apps/api/src/SupportDesk.Presentation",
     "web": "npm run dev --workspace apps/web",
     "build": "dotnet build && npm run build --workspace apps/web",
     "test": "dotnet test && npm run test --workspace apps/web",
@@ -17,8 +17,8 @@
     "format": "dotnet format",
     "format:check": "dotnet format --verify-no-changes",
     "typecheck": "npm run typecheck --workspace apps/web",
-    "ef": "dotnet tool restore && dotnet ef --project packages/infrastructure --startup-project apps/api",
-    "db:migrate": "dotnet tool restore && dotnet ef database update --project packages/infrastructure --startup-project apps/api"
+    "ef": "dotnet tool restore && dotnet ef --project apps/api/src/SupportDesk.Infrastructure --startup-project apps/api/src/SupportDesk.Presentation",
+    "db:migrate": "dotnet tool restore && dotnet ef database update --project apps/api/src/SupportDesk.Infrastructure --startup-project apps/api/src/SupportDesk.Presentation"
   },
   "engines": {
     "node": ">=20"

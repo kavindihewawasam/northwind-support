@@ -41,7 +41,28 @@ npm run web                   # terminal 2 — the React dev server
 
 In Development the API applies migrations and seeds demo data on startup, so there is nothing
 else to run. Prefer your own SQL Server? Point `ConnectionStrings__Default` at it in `.env`, or
-edit `apps/api/appsettings.Development.json`. **Never commit real credentials.**
+edit `apps/api/src/SupportDesk.Presentation/appsettings.Development.json`. **Never commit real credentials.**
+
+### Running from Visual Studio
+
+Visual Studio 2026 (the first version that supports .NET 10), with the **ASP.NET and web development**
+workload.
+
+1. **Start SQL Server**: `npm run db:up` (Docker must be running).
+2. **Open** `SupportDesk.sln` from the repository root. Solution Explorer shows a `src` folder
+   with the four layer projects and a `tests` folder.
+3. **Set the startup project**: right-click **SupportDesk.Presentation** →
+   **Set as Startup Project**.
+4. **Run**: pick the **https** profile in the toolbar and press **F5**. The API migrates and
+   seeds the database, then opens Swagger at https://localhost:7043/swagger.
+5. **Start the web app** from a terminal. It is an npm workspace, not part of the solution:
+   `npm install` (first time only), then `npm run web`, and open http://localhost:5173.
+
+Run the backend tests from **Test → Test Explorer → Run All**.
+
+> Opened this solution before the projects were restructured? If Visual Studio still points at an
+> old startup project or shows stale projects, close it, delete the hidden `.vs` folder in the
+> repository root, and reopen `SupportDesk.sln`.
 
 ### Tests
 
@@ -49,85 +70,122 @@ edit `apps/api/appsettings.Development.json`. **Never commit real credentials.**
 npm test                      # both suites: dotnet test, then the web tests
 ```
 
-Both pass on a clean checkout.
+Both pass on a clean checkout. The backend suites live in `apps/api/tests`: `SupportDesk.UnitTests`
+(domain aggregates and application handlers, laid out like `src`) and
+`SupportDesk.ArchitectureTests` (layer dependency rules, and a check that the EF model matches
+the migrations). Neither needs a database.
 
 ---
 
 ## Repository layout
 
-An `apps` / `packages` monorepo: deployable applications live in `apps/`, the libraries they are
-built from live in `packages/`.
+An `apps` monorepo: each deployable application lives in `apps/` together with its own code and
+tests. The API is a **domain-driven monolith** built in four clean-architecture layers.
 
 ```
 .
-├── apps/                          deployable applications
-│   ├── api/                       ASP.NET Core Web API — the only .NET executable
-│   │   ├── Controllers/           thin HTTP controllers
-│   │   ├── Filters/               request validation filter
-│   │   ├── Middleware/            central exception handling
-│   │   └── Program.cs
-│   └── web/                       React 19 + TypeScript + Vite (npm workspace @support-desk/web)
+├── apps/
+│   ├── api/                                .NET backend
+│   │   ├── src/
+│   │   │   ├── SupportDesk.Domain/         1. the core: no dependencies at all
+│   │   │   │   ├── Aggregates/             Tickets/, Categories/, Customers/, Agents/ — each
+│   │   │   │   │                           aggregate root with its child entities and enums
+│   │   │   │   ├── Common/                 Entity and AggregateRoot base classes
+│   │   │   │   ├── Exceptions/             BusinessRuleViolationException
+│   │   │   │   └── Repositories/           repository and unit-of-work interfaces
+│   │   │   ├── SupportDesk.Application/    2. use cases; depends only on Domain
+│   │   │   │   ├── Abstractions/           IClock and the read-side query interfaces
+│   │   │   │   ├── Contracts/              request / response DTOs, per feature
+│   │   │   │   ├── Exceptions/             NotFound / Conflict / Validation
+│   │   │   │   ├── Features/<Feature>/
+│   │   │   │   │   ├── Commands/<UseCase>/ state changes: handler + request validator
+│   │   │   │   │   └── Queries/<UseCase>/  reads
+│   │   │   │   └── DependencyInjection.cs
+│   │   │   ├── SupportDesk.Infrastructure/ 3. EF Core + SQL Server
+│   │   │   │   ├── Data/                   SupportDbContext (also the unit of work),
+│   │   │   │   │   ├── Configurations/     Fluent API mappings
+│   │   │   │   │   └── Migrations/         + the development seed data
+│   │   │   │   ├── Repositories/           domain repository implementations
+│   │   │   │   ├── Queries/                read-side query implementations
+│   │   │   │   └── Services/               SystemClock
+│   │   │   └── SupportDesk.Presentation/   4. ASP.NET Core Web API + composition root
+│   │   │       ├── Controllers/            thin: one handler call per action
+│   │   │       ├── Filters/                request validation filter
+│   │   │       ├── Middleware/             central exception handling
+│   │   │       └── Program.cs
+│   │   └── tests/
+│   │       ├── SupportDesk.UnitTests/      mirrors src: Domain/ (aggregates) and Application/ (handlers)
+│   │       └── SupportDesk.ArchitectureTests/ layer dependency rules + "model matches migrations"
+│   └── web/                                React 19 + TypeScript + Vite (npm workspace @support-desk/web)
 │       └── src/
-│           ├── api/               one typed client per resource
-│           ├── components/        shared presentational components
-│           ├── features/          tickets/ and customers/ — pages, components, hooks
-│           ├── hooks/             shared hooks
-│           ├── lib/               formatting helpers
-│           └── types/api.ts       the API contract, in TypeScript
-├── packages/                      .NET libraries
-│   ├── domain/                    entities and enums — no dependencies on anything
-│   ├── application/               use cases, DTOs, validation, the interfaces it needs
-│   └── infrastructure/            EF Core, repositories, the clock, the seeder, migrations
-├── tests/
-│   └── backend-unit-tests/        xUnit + Moq  (web tests live next to the code they test)
-├── db/                            reference schema + seed script
+│           ├── api/                        one typed client per resource
+│           ├── components/                 shared presentational components
+│           ├── features/                   tickets/ and customers/ — pages, components, hooks
+│           ├── hooks/                      shared hooks
+│           ├── lib/                        formatting helpers
+│           └── types/api.ts                the API contract, in TypeScript
+├── db/                                     reference schema + seed script
+├── spec/                                   feature specifications (empty for now)
 ├── .github/
-│   ├── workflows/ci.yml           CI: format, build and test the API; lint, typecheck, test and build the web app
+│   ├── workflows/ci.yml                    CI: format, build and test the API; lint, typecheck, test and build the web app
 │   └── pull_request_template.md
-├── .config/dotnet-tools.json      pinned local .NET tools (dotnet-ef)
-├── .editorconfig / .gitattributes formatting and line-ending rules, shared by every editor and OS
-├── .nvmrc                         Node.js version for nvm / fnm / CI
-├── Directory.Build.props          shared C# settings for every project
-├── Directory.Packages.props       central NuGet versions — one version per package, repo-wide
-├── global.json                    pinned .NET SDK
-├── package.json                   npm workspaces + the repo-wide scripts
-├── docker-compose.yml             SQL Server for local development
+├── .config/dotnet-tools.json               pinned local .NET tools (dotnet-ef)
+├── .editorconfig / .gitattributes          formatting and line-ending rules, shared by every editor and OS
+├── .nvmrc                                  Node.js version for nvm / fnm / CI
+├── Directory.Build.props                   shared C# settings for every project
+├── Directory.Packages.props                central NuGet versions — one version per package, repo-wide
+├── global.json                             pinned .NET SDK
+├── package.json                            npm workspaces + the repo-wide scripts
+├── docker-compose.yml                      SQL Server for local development
 ├── SupportDesk.sln
-└── ASSIGNMENT_CANDIDATE.md        the interview assignment
+└── ASSIGNMENT_CANDIDATE.md                 the interview assignment
 ```
 
 ### How the layers depend on each other
 
+Dependencies point inwards, towards the domain:
+
 ```
-apps/api ──► packages/application ──► packages/domain
-    │                   ▲
-    └──► packages/infrastructure ─────┘
+Presentation ──► Application ──► Domain
+     │                ▲            ▲
+     └──► Infrastructure ──────────┘
 ```
 
-- **domain** depends on nothing. Entities, enums, and rules that are true however the app is
-  hosted or stored.
-- **application** depends only on domain. It holds the use cases and declares the interfaces it
-  needs from the outside world (`ITicketRepository`, `IClock`, …). It knows nothing about EF
-  Core, HTTP or SQL Server.
-- **infrastructure** implements those interfaces with EF Core and SQL Server.
-- **api** maps HTTP to use cases and back. No business rules live here.
+- **Domain** depends on nothing. Aggregates have private setters and change only through their
+  methods (`Ticket.Raise`, `ChangeStatus`, `AssignTo`, `Agent.AddSpecialization`, …), so their
+  rules cannot be bypassed; a broken rule throws `BusinessRuleViolationException`. Aggregates
+  refer to each other **by id only** — no navigation properties between aggregates. Domain
+  methods take "now" as a parameter rather than reading a clock.
+- **Application** depends only on Domain. Each use case is one handler class, under
+  `Features/<Feature>/Commands` (changes state, through a repository and `IUnitOfWork`) or
+  `Features/<Feature>/Queries` (reads, through an `I…Queries` interface that returns DTOs). It
+  knows nothing about EF Core, HTTP or SQL Server.
+- **Infrastructure** implements the domain's repositories and the application's query
+  interfaces with EF Core. Write-side repositories load whole, tracked aggregates; read-side
+  queries use `AsNoTracking()` and join across aggregates to project straight to DTOs.
+- **Presentation** maps HTTP to handlers and back, and wires everything together in
+  `Program.cs`. No business rules live here.
 
-If you find yourself needing `using Microsoft.EntityFrameworkCore;` inside `application`, stop
-and think — not forbidden, but you should be able to justify it.
+`apps/api/tests/SupportDesk.ArchitectureTests` checks the dependency rule against the compiled
+assemblies, and fails when an EF Core mapping changes without a migration — neither needs a
+database.
 
 ### Conventions already in the codebase
 
 - **DTOs at every boundary.** Entities are never returned from a controller. Mapping happens in
-  the repository projections — there is no AutoMapper, and you do not need one.
-- **Validation** uses FluentValidation: one validator per request DTO, run by
-  `apps/api/Filters/ValidationFilter.cs`, surfacing as `400` with a problem document.
-- **Errors**: `NotFoundException` → `404`, `ConflictException` → `409`, `ValidationException` →
-  `400`, anything else → `500`. All handled centrally in
-  `apps/api/Middleware/ExceptionHandlingMiddleware.cs`; controllers never catch.
-- **Repositories** expose intention-revealing async methods, not `IQueryable`. Reads use
-  `AsNoTracking()` and project straight to DTOs; writes load a tracked entity.
-- **Time** comes from `IClock`. `packages/infrastructure/Services/SystemClock.cs` is the only
-  code that reads the machine clock, so behaviour that depends on "now" stays testable.
+  the query projections — there is no AutoMapper, and you do not need one.
+- **Validation** uses FluentValidation: one validator per request DTO, next to the command that
+  takes it, run by `apps/api/src/SupportDesk.Presentation/Filters/ValidationFilter.cs`,
+  surfacing as `400` with a problem document.
+- **Errors**: `NotFoundException` → `404`, `ConflictException` and
+  `BusinessRuleViolationException` → `409`, `ValidationException` → `400`, anything else →
+  `500`. All handled centrally in
+  `apps/api/src/SupportDesk.Presentation/Middleware/ExceptionHandlingMiddleware.cs`;
+  controllers never catch.
+- **Repositories and queries** expose intention-revealing async methods, not `IQueryable`.
+- **Time** comes from `IClock`.
+  `apps/api/src/SupportDesk.Infrastructure/Services/SystemClock.cs` is the only code that reads
+  the machine clock, so behaviour that depends on "now" stays testable.
 - **Enums** are stored as `int` and travel as strings over the wire.
 - **Cancellation tokens** are threaded through every async call.
 - **NuGet versions** live in `Directory.Packages.props`, never in a `.csproj`.
@@ -146,7 +204,7 @@ Base URL `https://localhost:7043`. Timestamps are UTC ISO-8601. Enums travel as 
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /api/tickets` | Paged list. Query: `page`, `pageSize` (max 100), `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy` (`createdAtUtc`\|`updatedAtUtc`\|`dueAtUtc`\|`priority`\|`status`), `sortDirection` (`asc`\|`desc`). |
+| `GET /api/tickets` | Paged list. Query: `page`, `pageSize` (max 100), `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy` (`createdAtUtc`\|`updatedAtUtc`\|`dueAtUtc`\|`priority`\|`status`), `sortDirection` (`asc`\|`desc`). **The filter parameters (`search` to `unassignedOnly`) are accepted but not applied yet** — only sorting and paging are implemented server-side. |
 | `GET /api/tickets/{id}` | One ticket with description and customer contact details. `404` if absent. |
 | `POST /api/tickets` | `{ title, description, customerId, categoryId, requestedPriority? }` → `201` + `Location`. Title 5–200, description 10–4000. |
 | `PATCH /api/tickets/{id}/status` | `{ status }`. Stamps or clears `resolvedAtUtc`. `409` when reopening a closed ticket. |
@@ -195,7 +253,7 @@ Customers ──< Tickets >── Categories          Agents >──< Categories
   **data**, so they can change without a code change.
 - `Agents.MaxOpenTickets` caps how much work an agent takes.
 - Ticket indexes cover the list screen's filters and sorts — see
-  `packages/infrastructure/Persistence/Configurations/TicketConfiguration.cs`.
+  `apps/api/src/SupportDesk.Infrastructure/Data/Configurations/TicketConfiguration.cs`.
 
 `db/schema.sql` is the same schema as raw SQL (reference only — the EF migrations are
 the source of truth), and `db/seed.sql` is the demo data plus some handy verification
@@ -219,7 +277,7 @@ docker exec -i supportdesk-sql /opt/mssql-tools18/bin/sqlcmd \
 | --- | --- |
 | `.env.example` → `.env` | `MSSQL_SA_PASSWORD` for the SQL Server container, plus `ConnectionStrings__Default` and `ASPNETCORE_ENVIRONMENT` for the API. |
 | `apps/web/.env.example` → `apps/web/.env.local` | `VITE_API_PROXY_TARGET` (dev-server proxy) and `VITE_API_BASE_URL` (what the app calls). |
-| `apps/api/appsettings.Development.json` | Local defaults, including EF command logging so you can see the SQL that runs. |
+| `apps/api/src/SupportDesk.Presentation/appsettings.Development.json` | Local defaults, including EF command logging so you can see the SQL that runs. |
 
 `.env` files are git-ignored, and only `VITE_`-prefixed variables reach the browser — never put
 a secret in one. Nothing here is required to run the project: every value has a working default.
@@ -249,9 +307,9 @@ The underlying .NET commands still work if you prefer them:
 ```bash
 dotnet build
 dotnet test
-dotnet run --project apps/api
+dotnet run --project apps/api/src/SupportDesk.Presentation
 dotnet tool restore            # once, for dotnet ef
-dotnet ef migrations add <Name> --project packages/infrastructure --startup-project apps/api
+dotnet ef migrations add <Name> --project apps/api/src/SupportDesk.Infrastructure --startup-project apps/api/src/SupportDesk.Presentation
 ```
 
 ## Troubleshooting
@@ -261,5 +319,7 @@ dotnet ef migrations add <Name> --project packages/infrastructure --startup-proj
 | API cannot reach the database | `npm run db:up`, then `docker compose ps` — is the container healthy? It takes ~20s on first start. |
 | `A network-related or instance-specific error` | Port 1433 already in use by another SQL Server; change the port in `docker-compose.yml` and `.env`. |
 | Browser warns about the API certificate | The backend uses the ASP.NET development certificate. `dotnet dev-certs https --trust`, or just use the web app, which proxies. |
+| `npm run ef` fails with "came from another computer and might be blocked" | Windows has marked the tool manifest as downloaded. Unblock it once: `powershell Unblock-File .config/dotnet-tools.json`. |
+| Visual Studio starts the wrong project, or lists projects that no longer exist | Close Visual Studio, delete the hidden `.vs` folder in the repository root, reopen `SupportDesk.sln`, and set **SupportDesk.Presentation** as the startup project. |
 | Web app shows "Unable to load tickets" | The API is not running, or is on a different port than `VITE_API_PROXY_TARGET`. |
 | SQL Server container is slow on Apple Silicon | The image is x86 and runs under emulation. Enable Rosetta in Docker Desktop → Settings → General. |

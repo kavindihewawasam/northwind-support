@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Use cases, organised as CQRS features (Commands change state, Queries only read), with the
+    DTOs and abstractions they need. Knows nothing about EF Core, HTTP or SQL Server.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../SupportDesk.Domain/SupportDesk.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The domain model: aggregates, their rules, and the repository contracts. No dependencies at all. -->
+
+</Project>
