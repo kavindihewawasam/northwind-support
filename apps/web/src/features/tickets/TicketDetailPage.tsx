@@ -2,16 +2,21 @@ import { Link, useParams } from 'react-router-dom';
 import { ErrorMessage } from '../../components/ErrorMessage';
 import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
+import type { EscalationResult } from '../../types/api';
 import { AssignAgentControl } from './components/AssignAgentControl';
+import { EscalationHistory } from './components/EscalationHistory';
+import { EscalationPanel } from './components/EscalationPanel';
 import { StatusActions } from './components/StatusActions';
 import { TicketSummary } from './components/TicketSummary';
 import { useTicket } from './hooks/useTicket';
+import { useTicketEscalations } from './hooks/useTicketEscalations';
 
 export function TicketDetailPage() {
   const { id } = useParams<{ id: string }>();
   const ticketId = Number(id);
 
   const { data: ticket, isLoading, error, reload, setData } = useTicket(ticketId);
+  const history = useTicketEscalations(ticketId);
   const reference = useReferenceData();
 
   if (Number.isNaN(ticketId)) {
@@ -29,6 +34,12 @@ export function TicketDetailPage() {
   if (!ticket) {
     return null;
   }
+
+  // The ticket comes back with the escalation, so only the history needs another request.
+  const handleEscalated = (result: EscalationResult) => {
+    setData(result.ticket);
+    void history.reload();
+  };
 
   return (
     <section>
@@ -51,6 +62,20 @@ export function TicketDetailPage() {
           </div>
 
           <StatusActions ticket={ticket} onUpdated={setData} />
+
+          <EscalationPanel ticket={ticket} onEscalated={handleEscalated} />
+
+          <div className="card">
+            <h2>Escalation history</h2>
+
+            {history.isLoading && !history.data && <Spinner label="Loading escalation history" />}
+
+            {history.error && (
+              <ErrorMessage message={history.error} onRetry={() => void history.reload()} />
+            )}
+
+            {history.data && <EscalationHistory escalations={history.data} />}
+          </div>
         </div>
 
         <aside className="detail-layout__side">

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ErrorMessage } from '../../components/ErrorMessage';
 import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
+import { formatDateTime } from '../../lib/format';
 import type { TicketDetail } from '../../types/api';
 import { CreateTicketForm } from './components/CreateTicketForm';
 
@@ -33,6 +34,30 @@ export function CreateTicketPage() {
           <p>
             Raised <strong>{created.reference}</strong> for {created.customer.name}.
           </p>
+
+          {created.triage && (
+            <ul>
+              <li>
+                Priority: <strong>{created.priority}</strong>. {created.triage.priorityReason}
+              </li>
+              <li>
+                Due: <strong>{formatDateTime(created.dueAtUtc)}</strong>. {created.triage.slaReason}
+              </li>
+              <li>
+                {created.assignedAgent ? (
+                  <>
+                    Assigned to <strong>{created.assignedAgent.fullName}</strong>.{' '}
+                  </>
+                ) : (
+                  <>
+                    <strong>Not assigned.</strong>{' '}
+                  </>
+                )}
+                {created.triage.assignmentReason}
+              </li>
+            </ul>
+          )}
+
           <div className="button-row">
             <button
               type="button"

@@ -69,6 +69,7 @@ describe('useTicketList', () => {
     ['customer', { customerId: 3 }],
     ['assigned agent', { assignedAgentId: 4 }],
     ['unassigned only', { unassignedOnly: true }],
+    ['SLA status', { slaStatus: 'AtRisk' }],
     ['sort order', { sortBy: 'priority', sortDirection: 'desc' }],
   ])('sends a request immediately when %s changes', async (_name, patch) => {
     const { change } = await renderLoaded();
