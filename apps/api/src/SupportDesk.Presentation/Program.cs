@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using SupportDesk.Application;
+using SupportDesk.Domain.Triage;
 using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
@@ -26,6 +27,11 @@ builder.Services.AddCors(options => options.AddPolicy(
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// SLA windows, premium multiplier, floor and at-risk threshold come from configuration (BR-6).
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection("Sla").Get<SlaPolicy>()
+    ?? throw new InvalidOperationException("The 'Sla' configuration section is missing."));
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);

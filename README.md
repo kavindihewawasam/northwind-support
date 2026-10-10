@@ -1,113 +1,3 @@
-# Northwind Support Desk
-
-A support ticket management system: raise tickets, search and filter them, assign them to agents,
-and move them through their lifecycle.
-
-**.NET 10 Web API** + **React 19 / TypeScript** + **SQL Server**, in one monorepo.
-
----
-
-## The assignment
-
-You are joining a team that already has this app working. Complete the tasks **in order**.
-Full requirements are in **[`ASSIGNMENT_CANDIDATE.md`](ASSIGNMENT_CANDIDATE.md)**.
-
-| # | Task | Done looks like | Effort |
-| --- | --- | --- | --- |
-| 1 | **Fix a defect, add server-side filtering** | Root cause fixed with a regression test; every list filter applied in the database with a correct count | ~2.5 h |
-| 2 | **Ticket escalation & assignment** | Automatic triage on create, escalation with history, SLA status, UI for all of it | ~7 h |
-| 3 | **Login and authentication** | Agents sign in; API rejects unauthenticated calls; login UI | ~4 h |
-| 4 | **Dockerise the API** *(optional)* | `docker compose up` gives a migrated, seeded API with no baked-in secret | ~1.5 h |
-
-### Guidance
-
-- **Time: 2 days.** Honestly marking a task "not finished" beats rushing all of them.
-- **Fork** this repo to your own GitHub account and work there. **Do not push to the original.**
-- **AI tools are allowed.** You must understand and be able to defend every line you submit.
-- **Commit as you go** and keep the real history. Commit the Task 1 defect fix and the filtering
-  separately from each other and from the feature work. A single squashed commit is not accepted.
-- **Where the spec is ambiguous**, make a decision, write it down in the README, and move on.
-- **Out of scope:** registration, password reset, roles, OAuth/SSO, refresh tokens, MFA,
-  notifications, CI, caching, visual redesign. Mention them under *Known limitations* instead.
-
-### Submission
-
-1. Update this **README** with what you built, your design decisions (chosen, rejected and why),
-   the defect's root cause, dev login credentials, how to run and test it, AI usage, and known
-   limitations. A reviewer must be able to run it without asking you anything.
-2. Add an **APPROACH.md** explaining your approach and thought process for each task.
-3. Commit both, then send us the **link to your fork**, the **dev login credentials**, and a
-   **rough note of time spent** on what. (If the fork is private, add the reviewers as collaborators.)
-
----
-
-## Quick start
-
-**Prerequisites:** .NET SDK 10 (`global.json`), Node.js 22 (`.nvmrc`; 20.19+ works), Docker.
-
-```bash
-cp .env.example .env          # optional, every value has a working default
-npm install                   # installs the web app
-npm run db:up                 # SQL Server 2022 in Docker on localhost:1433
-npm run api                   # terminal 1: migrates, seeds, then serves the API
-npm run web                   # terminal 2: React dev server
-```
-
-| What | Where |
-| --- | --- |
-| Web app | http://localhost:5173 |
-| API | https://localhost:7043 (also http://localhost:5043) |
-| Swagger | https://localhost:7043/swagger |
-
-In Development the API applies migrations and seeds demo data on startup. **Never commit real
-credentials.**
-
-**Visual Studio 2026:** run `npm run db:up`, open `SupportDesk.sln`, set
-**SupportDesk.Presentation** as the startup project, and press F5 on the **https** profile.
-
-## Tests
-
-```bash
-npm test                      # dotnet test, then the web tests (Vitest)
-```
-
-Both pass on a clean checkout and neither needs a database.
-
-## Commands
-
-| Command | What it does |
-| --- | --- |
-| `npm run db:up` / `db:down` / `db:reset` | Start / stop / wipe SQL Server |
-| `npm run api` / `npm run web` | Run the API / the React app |
-| `npm run build` | Build both |
-| `npm run lint` / `typecheck` / `format` | Web lint and types / `dotnet format` |
-| `npm run ef -- migrations add <Name>` | Add an EF Core migration |
-
-## API at a glance
-
-| Endpoint | Description |
-| --- | --- |
-| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. **Filters are accepted but not applied yet** (Task 1). |
-| `GET /api/tickets/{id}` | One ticket |
-| `POST /api/tickets` | Create a ticket |
-| `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
-| `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
-
-Errors are `ProblemDetails`: `400` validation, `404` not found, `409` conflict or business rule.
-
-**Seed data:** 5 categories, 6 customers (3 Premium), 6 agents (one inactive, one at their limit)
-and 40 tickets across every status, priority and SLA state.
-
-## Troubleshooting
-
-| Symptom | Fix |
-| --- | --- |
-| API cannot reach the database | `npm run db:up`, wait ~20 s, check `docker compose ps` |
-| Port 1433 already in use | Change the port in `docker-compose.yml` and `.env` |
-| Browser warns about the certificate | `dotnet dev-certs https --trust`, or use the web app, which proxies |
-| Web app shows "Unable to load tickets" | The API is not running, or `VITE_API_PROXY_TARGET` points at the wrong port |
-| SQL Server slow on Apple Silicon | Enable Rosetta in Docker Desktop → Settings → General |
-
 
 ## Task 1.1: DEFECT-117 (filters sometimes do not take effect)
 
@@ -300,3 +190,80 @@ Migration `AddTicketEscalations` adds:
 - `TheModel_MatchesTheLatestMigration` (architecture test) confirms the model and the migration agree.
 
 *Still to add here: the API endpoints, the `slaStatus` filter, the UI, and the manual checks.*
+
+### Triage on create (BR-1..BR-6)
+`RaiseTicketCommandHandler` loads the category flags, whether the customer is Premium and every
+agent's open-ticket count, asks `TicketTriage` for a decision, then creates the ticket with
+`Ticket.Raise` + `ApplyTriage`. The response is the ticket plus a `triage` object: reason for the
+priority, SLA window in minutes with its reason, and the reason for the assignment. If nobody is
+eligible the ticket is still created (201), unassigned, and the assignment reason says why.
+
+### Escalation endpoints (BR-7)
+`EscalateTicketCommandHandler` checks the ticket exists (404), then that it is open and not Critical
+(409 with a message naming which), loads the same inputs as create, asks `TicketTriage.ForEscalation`
+and calls `Ticket.Escalate`. The reason is validated before the handler runs (400): trimmed, 5-500
+characters; `escalatedBy` is required, max 100. Until Task 3, `escalatedBy` comes from the request body.
+
+### `slaStatus` filter in SQL
+`slaStatus` is one more predicate in `TicketQueries.Predicates` (the extension point from Task 1): no
+change to counting, sorting or paging. `SlaPredicate` is the SQL form of `SlaEvaluator`, built from
+the same columns (`DueAtUtc`, `ResolvedAtUtc`, `SlaWindowMinutes`). "At risk" compares
+`DATEDIFF(second, now, due)` with a share of the stored window, so it uses SQL Server's `DATEDIFF`.
+The list and detail DTOs compute `SlaStatus` with the same `SlaEvaluator` and the same configured
+threshold. Because the SQL and the C# rules are two forms of one rule, the boundary tests exist on both
+sides (see Tests).
+
+### Design decisions (this part)
+- **`ITriageInputs`, a read-only seam for the triage inputs.** It returns the category flags, the
+  customer tier and the agent candidates (id, limits, open-ticket count, specialization ids). The rules
+  stay free of EF Core and the handlers stay thin. Rejected: loading agents and tickets through the
+  repositories and counting in C# (an N+1 on agents' open tickets), and adding methods to the existing
+  repository interfaces (it widens aggregates' repositories with query-shaped methods).
+- **Same code path for create and escalate.** Both build a `TriageContext` and call `TicketTriage`;
+  neither contains a rule. Rejected: re-implementing assignment inside the escalate handler.
+- **Escalating excludes the ticket's own load.** `GetAgentCandidatesAsync(excludingTicketId)` leaves
+  the ticket being escalated out of its agent's open count, otherwise an agent exactly at their limit
+  would count as ineligible for a ticket they already hold.
+- **409 for "cannot escalate", checked in the handler with a specific message.** The aggregate also
+  enforces it (defence in depth), but the handler checks first so the message can say Critical or
+  Resolved/Closed. Rejected: letting the domain exception through (its text is the same, but the
+  ordering of 404/409 checks would be less obvious).
+- **Manual assignment is unchanged.** `PATCH /assignment` stays the team lead's override and does not
+  apply the specialist rule (as it did before Task 2).
+- **`SlaPolicy` is bound from configuration once and registered as a singleton**, so a missing priority
+  window fails loudly rather than using a hidden default.
+
+### Assumptions
+- Escalation always re-evaluates the owner: keep the current agent if still eligible, otherwise choose
+  again; if nobody is eligible the ticket becomes unassigned and the history row records that.
+- The due date after escalation is *now* + the new window (not creation time + window).
+- Seed tickets get `SlaWindowMinutes` from their seeded window, so the demo data shows AtRisk tickets.
+
+### Tests (this part)
+- `RaiseTicketTriageTests`: a Premium Security ticket requested as Low becomes Critical with a 2 h
+  window and the least-loaded specialist (a full agent and a non-specialist are skipped); with nobody
+  eligible the ticket is still created, unassigned, with a reason.
+- `EscalateTicketCommandHandlerTests`: unknown ticket (404), Critical (409, message), Resolved and
+  Closed (409, message names the status), priority raised, due date from now, history row written,
+  agent kept while eligible and changed when not, own load excluded.
+- `TicketQueriesSlaFilterTests` (SQLite): NotApplicable, Met and Breached, the filter combined with
+  another filter, and the count/pages for the filtered set.
+- **Deliberately not automated:** the AtRisk and WithinSla filters, because they use SQL Server's
+  `DATEDIFF`, which SQLite does not have. Their boundary logic is covered in `SlaEvaluatorAtRiskTests`;
+  the SQL was checked by hand against the SQL Server container (see below).
+
+### Manual checks (SQL Server, Swagger)
+- `POST /api/tickets` (customer 1 Contoso/Premium, category 5 Security, requested Low): [201, priority
+  Critical, due [..] ≈ 2 h ahead, assigned [Priya Nair], triage reasons present]
+- Billing ticket for Fabrikam: [assigned to Sara Lindqvist]
+- `POST /api/tickets/{id}/escalate`: [200 Medium→High, due ≈ 8 h ahead]; again → Critical; a third time →
+  [409 "already Critical"]; reason `abc` → [400]; ticket 9999 → [404]; ticket 25 (Resolved) → [409].
+- `GET /api/tickets/{id}/escalations`: [newest first, before/after values correct]
+- `GET /api/tickets?slaStatus=AtRisk` (and the other four): [only matching tickets; the five counts add
+  up to totalCount]. The SQL log shows `DATEDIFF(second, ...)` in the `WHERE`.
+
+### Known limitations (this part)
+- `escalatedBy` is a plain string from the body until Task 3 replaces it with the signed-in user.
+- Two tickets created at the same moment can read the same agent loads and pick the same agent
+  (no locking); acceptable for a single-instance demo, a transaction or a queue would fix it.
+- `NextReferenceAsync` still uses "highest id + 1" (existing behaviour).

@@ -9,6 +9,7 @@ using SupportDesk.Infrastructure.Data;
 using SupportDesk.Infrastructure.Queries;
 using SupportDesk.UnitTests.TestDoubles;
 using Xunit;
+using SupportDesk.Domain.Triage;
 
 namespace SupportDesk.UnitTests.Infrastructure.Queries;
 
@@ -56,7 +57,8 @@ public sealed class TicketQueriesFilterTests : IDisposable
             NewTicket("TCK-0005", "Printer question", fabrikam.Id, general.Id, TicketPriority.Medium, TicketStatus.Open));
         _db.SaveChanges();
 
-        _queries = new TicketQueries(_db, new FixedClock());
+        // _queries = new TicketQueries(_db, new FixedClock());
+        _queries = new TicketQueries(_db, new FixedClock(), new SlaPolicy { AtRiskThresholdPercent = 25 });
     }
 
     [Fact]

@@ -3,12 +3,15 @@ using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
+using SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
+using SupportDesk.Application.Features.Tickets.Queries.GetTicketEscalations;
 using SupportDesk.Domain.Aggregates.Agents;
 using SupportDesk.Domain.Aggregates.Customers;
 using SupportDesk.Domain.Aggregates.Tickets;
 using SupportDesk.Domain.Repositories;
+using SupportDesk.Domain.Triage;
 using SupportDesk.UnitTests.TestDoubles;
 
 namespace SupportDesk.UnitTests.Application.Features.Tickets.Commands;
@@ -27,6 +30,11 @@ internal sealed class TicketCommandTestContext
         Categories.Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
+        // By default: a General category (no special rules), a Standard customer and no agents.
+        WithCategory(new CategoryRules(1, "General", RequiresSpecialist: false, ForcesCriticalPriority: false));
+        WithPremiumCustomer(false);
+        WithAgents();
+
         Tickets.Setup(t => t.NextReferenceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync("TCK-0041");
 
@@ -44,10 +52,20 @@ internal sealed class TicketCommandTestContext
                 Category = new CategoryDto(1, "General", false)
             });
 
+        TicketQueries.Setup(q => q.GetEscalationsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new TicketEscalationDto(
+                    1, 41, TicketPriority.Medium, TicketPriority.High, null, null, null,
+                    Clock.UtcNow.AddHours(8), "Customer is blocked", "alex.turner", Clock.UtcNow)
+            ]);
+
         var getTicket = new GetTicketQueryHandler(TicketQueries.Object);
+        var getEscalations = new GetTicketEscalationsQueryHandler(TicketQueries.Object);
+        var triage = new TicketTriage(Sla);
 
         RaiseTicket = new RaiseTicketCommandHandler(
-            Tickets.Object, Customers.Object, Categories.Object, UnitOfWork.Object, Clock, getTicket,
+            Tickets.Object, Customers.Object, TriageInputs.Object, triage, UnitOfWork.Object, Clock, getTicket,
             NullLogger<RaiseTicketCommandHandler>.Instance);
 
         ChangeTicketStatus = new ChangeTicketStatusCommandHandler(Tickets.Object, UnitOfWork.Object, Clock, getTicket);
@@ -55,6 +73,10 @@ internal sealed class TicketCommandTestContext
         AssignTicket = new AssignTicketCommandHandler(
             Tickets.Object, Agents.Object, UnitOfWork.Object, Clock, getTicket,
             NullLogger<AssignTicketCommandHandler>.Instance);
+
+        EscalateTicket = new EscalateTicketCommandHandler(
+            Tickets.Object, TriageInputs.Object, triage, UnitOfWork.Object, Clock, getTicket, getEscalations,
+            NullLogger<EscalateTicketCommandHandler>.Instance);
     }
 
     public Mock<ITicketRepository> Tickets { get; } = new();
@@ -69,13 +91,32 @@ internal sealed class TicketCommandTestContext
 
     public Mock<ITicketQueries> TicketQueries { get; } = new();
 
+    public Mock<ITriageInputs> TriageInputs { get; } = new();
+
     public FixedClock Clock { get; } = new();
+
+    /// <summary>The configured SLA values the tests run against (the same numbers as appsettings).</summary>
+    public SlaPolicy Sla { get; } = new()
+    {
+        BaseWindowHours =
+        {
+            [TicketPriority.Low] = 72,
+            [TicketPriority.Medium] = 24,
+            [TicketPriority.High] = 8,
+            [TicketPriority.Critical] = 4
+        },
+        PremiumCustomerMultiplier = 0.5,
+        MinimumWindowHours = 1,
+        AtRiskThresholdPercent = 25
+    };
 
     public RaiseTicketCommandHandler RaiseTicket { get; }
 
     public ChangeTicketStatusCommandHandler ChangeTicketStatus { get; }
 
     public AssignTicketCommandHandler AssignTicket { get; }
+
+    public EscalateTicketCommandHandler EscalateTicket { get; }
 
     /// <summary>The ticket handed to the repository by the last create call.</summary>
     public Ticket? AddedTicket { get; private set; }
@@ -100,6 +141,20 @@ internal sealed class TicketCommandTestContext
 
         Agents.Setup(a => a.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(agent);
     }
+
+    /// <summary>The category the triage rules will see, whatever id is asked for.</summary>
+    public void WithCategory(CategoryRules category) =>
+        TriageInputs.Setup(t => t.GetCategoryRulesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(category);
+
+    public void WithPremiumCustomer(bool isPremium) =>
+        TriageInputs.Setup(t => t.IsPremiumCustomerAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)isPremium);
+
+    /// <summary>The agents (with their open-ticket counts) the assignment rule will choose from.</summary>
+    public void WithAgents(params AgentCandidate[] agents) =>
+        TriageInputs.Setup(t => t.GetAgentCandidatesAsync(It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(agents);
 
     public void VerifySaved(Times times) =>
         UnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), times);

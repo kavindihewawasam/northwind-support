@@ -40,6 +40,7 @@ public static class DependencyInjection
         services.AddScoped<ICustomerQueries, CustomerQueries>();
         services.AddScoped<IAgentQueries, AgentQueries>();
         services.AddScoped<ICategoryQueries, CategoryQueries>();
+        services.AddScoped<ITriageInputs, TriageInputs>();
 
         services.AddScoped<SupportDbSeeder>();
 

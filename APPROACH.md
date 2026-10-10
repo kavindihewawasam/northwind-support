@@ -106,3 +106,40 @@ AtRisk. The architecture test that compares the model with the latest migration 
 agree.
 
 *Still to write: the endpoints, the SQL `slaStatus` filter, the UI.*
+
+### Wiring the rules into create and escalate
+
+**Plan.** The rules were already tested, so this step was plumbing: get the inputs the rules need,
+call them, store the result. I wanted the handlers to contain no business rule at all, so that
+reading `RaiseTicketCommandHandler` and `EscalateTicketCommandHandler` side by side shows they are the
+same few steps with different decisions behind them.
+
+**The one new abstraction.** The rules need the category flags, the customer tier and each agent's
+workload, and none of the existing repository interfaces return those. I added one small read-only
+interface (`ITriageInputs`) rather than stretching the repositories, because it is exactly a seam
+(database on one side, rules on the other) and the tests replace it with a mock. The agent workload is
+one grouped subquery, not a count per agent, so it does not scale with the number of agents.
+
+**The escalation catch.** When a ticket is escalated, its own agent already "holds" it. If that agent is
+exactly at their limit, counting this ticket would make them ineligible for their own ticket and the
+ticket would be reassigned for no reason. So the inputs query can leave one ticket out of the count.
+I found this by writing the "keep the current agent" test with an agent at the limit before writing the
+query.
+
+**Ordering the checks.** Escalate returns 404 for an unknown ticket first, then 409 for "cannot
+escalate" with a message naming why (Critical, or Resolved/Closed), then 400 for a bad reason before the
+handler even runs (the existing validation filter). That order means a caller always learns the most
+fundamental problem first.
+
+**The SQL filter.** The SLA filter had to run in the database, including sorting and paging, so I could
+not reuse the C# `SlaEvaluator`. I wrote `SlaPredicate` as the SQL form of the same rule, built from the
+same columns, and put it behind the `Predicates` extension point I made in Task 1: adding it changed
+nothing else in the query, which is what FL-6 asked for. The price is two forms of one rule, so I
+tested the boundaries on the C# side and checked the SQL on a real SQL Server by calling each status
+and confirming the five counts add up to the total. SQLite has no `DATEDIFF`, which is why AtRisk and
+WithinSla are not covered by the automated database tests; I have said so in the README rather than
+hide it.
+
+**What I would do with more time.** Move the SQL/C# duplication to a single definition (for example a
+database view or a computed column) and add a database-level check that the five statuses partition the
+table.

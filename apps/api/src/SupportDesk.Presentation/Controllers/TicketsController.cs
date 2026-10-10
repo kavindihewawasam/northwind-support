@@ -3,8 +3,10 @@ using SupportDesk.Application.Contracts.Common;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
+using SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
+using SupportDesk.Application.Features.Tickets.Queries.GetTicketEscalations;
 using SupportDesk.Application.Features.Tickets.Queries.SearchTickets;
 
 namespace SupportDesk.Presentation.Controllers;
@@ -27,7 +29,10 @@ public sealed class TicketsController : ControllerBase
     public Task<TicketDetailDto> Get(int id, [FromServices] GetTicketQueryHandler handler, CancellationToken ct) =>
         handler.HandleAsync(id, ct);
 
-    /// <summary>Raises a new ticket.</summary>
+    /// <summary>
+    /// Raises a new ticket. Priority, due date and owner are decided automatically; the response
+    /// says what was decided and why. With nobody eligible the ticket is still created, unassigned.
+    /// </summary>
     [HttpPost]
     public async Task<ActionResult<TicketDetailDto>> Create(
         CreateTicketRequest request,
@@ -56,4 +61,24 @@ public sealed class TicketsController : ControllerBase
         [FromServices] AssignTicketCommandHandler handler,
         CancellationToken ct) =>
         handler.HandleAsync(id, request, ct);
+
+    /// <summary>
+    /// Escalates a ticket one priority level, restarts its SLA window and re-evaluates its owner.
+    /// 400 invalid reason or missing actor, 404 unknown ticket, 409 Critical or resolved/closed.
+    /// </summary>
+    [HttpPost("{id:int}/escalate")]
+    public Task<EscalationResultDto> Escalate(
+        int id,
+        EscalateTicketRequest request,
+        [FromServices] EscalateTicketCommandHandler handler,
+        CancellationToken ct) =>
+        handler.HandleAsync(id, request, ct);
+
+    /// <summary>A ticket's escalation history, newest first.</summary>
+    [HttpGet("{id:int}/escalations")]
+    public Task<IReadOnlyList<TicketEscalationDto>> Escalations(
+        int id,
+        [FromServices] GetTicketEscalationsQueryHandler handler,
+        CancellationToken ct) =>
+        handler.HandleAsync(id, ct);
 }
