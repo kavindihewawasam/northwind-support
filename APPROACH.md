@@ -71,3 +71,38 @@ category cannot be escalated further, so escalation of those tickets is rejected
 connect them to create and escalate I am only testing the plumbing.
 
 *Still to write: SLA status and the at-risk threshold, the endpoints, the migration, the UI.*
+
+### Escalation, history and SLA status
+
+**What the brief forced me to decide.** BR-8 says a ticket is at risk when 25% or less of "the window"
+remains. But BR-7 restarts the window on escalation, so I cannot get the window from due date minus
+creation time. I considered three options: store a "window start" timestamp, store the window length,
+or recompute the window from priority and customer tier each time. Recomputing would break as soon as
+the configuration changed (old tickets would be judged by new numbers), and a start timestamp works
+but needs a subtraction everywhere. I stored the window length, set at the same moment as the due date.
+The SLA *status* is still never stored, as BR-8 requires.
+
+**Where the escalation lives.** I put `Escalate` on the `Ticket` aggregate so the rules "Critical and
+Resolved/Closed cannot be escalated" and "exactly one level up" cannot be bypassed by any caller.
+It does not decide the new owner or due date itself: that needs the list of agents, which an aggregate
+should not load, so the triage rules decide and the aggregate checks and records. The history row is
+created inside `Escalate`, so a ticket can never change priority without leaving a record.
+
+**History as an audit trail.** Rows are immutable (no setters, internal constructor) and the
+foreign keys use Restrict, because deleting history when a ticket or an agent is removed would defeat
+the point of having it. I added one composite index (`TicketId`, `EscalatedAtUtc`) because the only
+question asked of this table is "this ticket's history, newest first".
+
+**Edge cases.** The reason and actor are trimmed before they are stored. A ticket can be escalated more
+than once, up to Critical. An escalation can end with no owner when nobody is eligible; the history row
+records that with a null `ToAgentId`. A ticket with no due date has no window, so it can never be
+AtRisk.
+
+**How I checked it.** I wrote the evaluator tests around the exact boundaries first (25% left, one
+second more, due exactly now, resolved exactly on the due date) because those are where an off-by-one
+would hide. For the migration I read the generated `Up()` before running it, and added one SQL
+statement to backfill the window for tickets that already exist, otherwise they could never show as
+AtRisk. The architecture test that compares the model with the latest migration confirmed the two
+agree.
+
+*Still to write: the endpoints, the SQL `slaStatus` filter, the UI.*

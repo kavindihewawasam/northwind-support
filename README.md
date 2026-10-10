@@ -252,3 +252,51 @@ open tickets, inactive agents, the limit boundary, specialists, ties, nobody eli
 one-step escalation, due date from now, Critical rejected, and keeping or changing the agent on escalation.
 
 *Still to add here: SLA status (BR-8), the API endpoints, the migration and its index, and the UI.*
+### Escalation and SLA status (domain and database)
+
+**Escalation on the aggregate.** `Ticket.Escalate(...)` is the only way to escalate. It refuses a
+resolved/closed or Critical ticket, checks the new priority is exactly one level up, then updates
+priority, due date, SLA window and owner and adds one `TicketEscalation` history row in the same
+operation. The *values* (new priority, due date, owner) come from `TicketTriage`, so create and
+escalate share one set of rules; the aggregate only guards that the change is allowed.
+`TicketEscalation` has an internal constructor and private setters, so a history row can be
+created but never edited.
+
+**SLA status (BR-8) is derived, never stored.** `SlaEvaluator.Evaluate(due, resolved, now,
+windowMinutes, atRiskPercent)` returns NotApplicable, Met, Breached, AtRisk or WithinSla. "Now" is a
+parameter, so tests pass a fixed time. Boundaries: exactly 25% of the window left is AtRisk; due
+exactly now is AtRisk (not yet breached); resolved exactly at the due date is Met.
+
+**Why `SlaWindowMinutes` is stored.** "At risk" means 25% or less of the *window* remains. The window
+is not always due minus created, because escalation restarts it from the moment of escalation. So the
+window length is stored next to the due date, set whenever the due date is set (triage and
+escalation). Existing rows are backfilled by the migration (`DATEDIFF(minute, CreatedAtUtc, DueAtUtc)`)
+and the seeder sets it for demo tickets. The status itself is still computed from these columns.
+
+### Database
+Migration `AddTicketEscalations` adds:
+- `Tickets.SlaWindowMinutes` (int, nullable: null when the ticket has no due date).
+- Table `TicketEscalations`: `Id`, `TicketId` (FK), `FromPriority`/`ToPriority`, `FromAgentId`/`ToAgentId`
+  (nullable FKs to Agents), `FromDueAtUtc` (nullable)/`ToDueAtUtc`, `Reason` (500), `EscalatedBy` (100),
+  `EscalatedAtUtc`.
+- **Index `IX_TicketEscalations_TicketId_EscalatedAtUtc`** (my choice). The history is always read as
+  "one ticket's rows, newest first", so one composite index serves the foreign key and the sort and
+  avoids a separate sort step. A plain `TicketId` index would only cover the lookup.
+- EF Core also generated plain indexes on `FromAgentId` and `ToAgentId` (it indexes foreign keys by
+  default). I kept them; they are small and I did not choose them deliberately.
+- **Delete behaviour: Restrict** on every foreign key of the history table. It is an audit record, so
+  deleting a ticket or an agent must not silently delete or null out its history. Agent ids are
+  nullable because a ticket can have no owner before or after an escalation.
+- Reads are projected with `AsNoTracking` and no navigation loading, so there is no N+1.
+
+### Tests (this part)
+- `TicketEscalationTests`: one-step priority increase, window restarted, due date from now, owner
+  changed or removed, correct history row (before/after values, trimmed reason and actor), repeated
+  escalation recorded step by step, Critical rejected, Resolved/Closed rejected, more than one level
+  rejected, reason and actor required.
+- `SlaEvaluatorAtRiskTests`: every BR-8 outcome at its exact boundary (25% left, a second more, due
+  exactly now, one tick late, resolved exactly on time, resolved late, no window).
+- The existing `SlaEvaluatorTests` still pass unchanged: the two new parameters are optional.
+- `TheModel_MatchesTheLatestMigration` (architecture test) confirms the model and the migration agree.
+
+*Still to add here: the API endpoints, the `slaStatus` filter, the UI, and the manual checks.*
