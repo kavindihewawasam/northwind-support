@@ -144,4 +144,58 @@ a stale request on every keystroke (my tests caught it: 2 failed, expecting 1 ca
 `isLoading` is now derived instead of set inside the effect. Generated code was verified
 with the tests, lint, typecheck and manual checks in the browser.
 
+## Task 1.2: Server-side filtering
 
+**Where it is applied.** `TicketQueries.GetPagedAsync` (Infrastructure layer). The query is
+built in this order: join labels → apply filters → count → sort → skip/take → project.
+Because the count and the page both come from the *filtered* query, `totalCount`,
+`totalPages` and the pager describe the filtered set (FL-5). Nothing is filtered in C#.
+
+**How it works.** `Predicates(query)` returns one small condition per filter the caller
+actually supplied (status, priority, categoryId, customerId, assignedAgentId,
+unassignedOnly, search). `ApplyFilters` chains them with `.Where(...)`, which EF Core
+translates to a single SQL `WHERE ... AND ...` (FL-4). A filter that is not supplied adds
+nothing.
+
+**Rules as understood.**
+- `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`: exact match (FL-1).
+- `unassignedOnly=true`: only tickets with no assigned agent (FL-2).
+- `search`: trimmed; blank is ignored; matches ticket title, reference (e.g. `TCK-0042`) or
+  customer name using "contains" (FL-3).
+
+**How to add the next filter (FL-6).** Add one field to `TicketQuery` and one
+`if (...) { yield return x => ...; }` block in `Predicates`. The count, sort and paging
+code does not change. The Task 2 `slaStatus` filter will be added this way.
+
+**How the SQL was checked.** I called the API and read the SQL that EF Core logs in the API
+terminal. For `GET /api/tickets?status=InProgress&pageSize=3` the count query and the page
+query both contain the `WHERE` on `Status`, so the database filters before counting and paging.
+Results: `totalCount: 7`, `totalPages: 3`, 3 items, all `InProgress`. A blank search
+(`?search=%20%20`) returned all 40 tickets.
+
+> TODO before submitting: paste the real `SELECT COUNT(*) ... WHERE ...` text from the API
+> terminal here (it shows as `Executed DbCommand`).
+
+**Design decisions.**
+- *Chosen:* a list of predicates chained with `Where`. Rejected: one big `Where` with
+  `(status == null || x.Status == status) && ...` (grows with every filter and is harder to
+  read), and filtering in C# after loading (breaks paging and counts, and was ruled out).
+- Search uses `Contains` on title, reference and customer name. Case sensitivity follows the
+  database collation (SQL Server's default is case-insensitive). I did not add full-text search
+  because it is out of scope.
+
+**Assumptions.**
+- Combining `assignedAgentId` with `unassignedOnly=true` is contradictory, so AND returns an
+  empty result.
+- Search terms are not split into words: the whole trimmed text is matched as one phrase.
+
+**Tests.** Backend tests for exact-match priority, a combination of filters, and a search on
+customer name. (Add the file name and the command, `npm test`, once written.)
+
+**AI usage (Task 1.2).** Used an AI assistant to design the predicate approach and write the
+code. Verification: I called the API with each filter, checked `totalCount` and `totalPages`
+against the filtered results, and read the generated SQL. Issues along the way: its first
+edit instructions led me to a duplicated `GetPagedAsync` method that did not compile, which
+I fixed by replacing the whole file; and `dotnet build` failed with "file is locked" errors
+because the API was still running, so I stopped the API and restarted it with `npm run api`
+(which compiles the code).
