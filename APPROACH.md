@@ -43,3 +43,31 @@ A list of predicates means the next filter (Task 2's SLA status) is one added bl
 **Checking.** I called the API with each filter, compared `totalCount`/`totalPages` with the
 visible items, tried a blank search (ignored) and read the SQL EF Core logs to confirm the
 `WHERE` runs in the database before counting and paging.
+
+## Task 2: Ticket escalation and assignment
+
+**Reading the brief.** The task says the rules are simple and "the challenge is where they are placed".
+That told me to design for one thing first: creating and escalating a ticket must share the same
+decisions, otherwise the two paths drift apart.
+
+**Where the rules go.** I made a small `Triage` folder in the domain with four classes (SLA window,
+priority, agent assignment, and a `TicketTriage` that combines them). Nothing in it knows about the
+database, HTTP or the clock: the handler hands it plain values (the category's flags, whether the
+customer is Premium, "now", and the agents with their open-ticket counts) and gets a decision back,
+including a reason in words. That keeps each rule testable on its own and means "no eligible agent"
+is just a decision with no owner, not an error.
+
+**Configuration.** The `Sla` section was already in `appsettings.Development.json`, so I bound it to
+`SlaPolicy` instead of adding constants. I left out default values on purpose: if a priority is missing
+from the configuration the code throws a clear error rather than quietly using a hidden number.
+
+**Edge cases I thought about.** A premium window must not drop below 1 hour (a 1.5 h critical window
+halved would be 45 minutes). The limit is strict ("strictly below"), so an agent holding exactly their
+maximum is not eligible. On escalation the ticket already counts towards its own agent's load, so it
+has to be excluded or an agent at their limit could never keep their own ticket. A forced-Critical
+category cannot be escalated further, so escalation of those tickets is rejected.
+
+**Tests first.** The rules are covered by tests before anything is wired into the API, so when I
+connect them to create and escalate I am only testing the plumbing.
+
+*Still to write: SLA status and the at-risk threshold, the endpoints, the migration, the UI.*

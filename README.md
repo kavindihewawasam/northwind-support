@@ -205,3 +205,50 @@ edit instructions led me to a duplicated `GetPagedAsync` method that did not com
 I fixed by replacing the whole file; and `dotnet build` failed with "file is locked" errors
 because the API was still running, so I stopped the API and restarted it with `npm run api`
 (which compiles the code).
+
+## Task 2: Ticket escalation and assignment (in progress)
+
+### Where the rules live
+All business rules are plain classes in `SupportDesk.Domain/Triage`. They have no database, HTTP or
+clock dependency, so they are unit-tested directly and are shared by creating and escalating a
+ticket (one place, no duplicated rules).
+
+| Class | Rules | Responsibility |
+| --- | --- | --- |
+| `SlaPolicy` | BR-2, BR-3, BR-6 | Window for a priority and customer tier: base hours, premium multiplier, 1 h floor. Bound from the `Sla` configuration section. |
+| `PriorityRules` | BR-1, BR-7 | Initial priority (requested, default Medium, forced Critical by category flag) and one-level escalation. |
+| `AgentAssignment` | BR-4, BR-5, BR-7 | Eligibility (active, specialised where the category requires it, strictly below `MaxOpenTickets`), fewest open tickets, lowest id as the tie-break, keep-the-current-agent on escalation. |
+| `TicketTriage` | all of the above | Combines them into one `TriageDecision` (priority, due date, owner, and a human-readable reason for each). |
+
+### Rules as understood
+- Priority: the requested one, Medium by default; a category with `ForcesCriticalPriority` is always Critical.
+- Due date = time of triage + window. Premium customers get `PremiumCustomerMultiplier` (0.5) of the
+  window, never below `MinimumWindowHours` (1 h).
+- Only a category with `RequiresSpecialist` restricts the owner to agents with that specialization.
+  No category names are hard-coded: behaviour comes from the category flags.
+- Nobody eligible is a normal outcome: the ticket is created unassigned and the reason says why.
+- Escalation raises priority one level and recomputes the due date from the moment of escalation. The
+  current agent is kept while still eligible, otherwise the ticket is reassigned as above. Critical
+  tickets cannot be escalated.
+
+### Design decisions
+- **Chosen: pure rule classes plus a thin handler.** The handlers load data and save; the decisions are
+  made in `TicketTriage`. Rejected: putting the rules in the controllers or the handlers (they would be
+  duplicated between create and escalate and could only be tested with mocks and a database).
+- **Chosen: configuration in the existing `Sla` section** (`appsettings`), bound to `SlaPolicy`, with
+  no defaults in code, so the configuration is the single source of truth and a missing priority fails
+  loudly. Rejected: constants in code (BR-6) and a settings table (more than the task needs).
+- **Chosen: agents are passed in as plain `AgentCandidate` values** (id, limits, open-ticket count,
+  specialization ids) so the assignment rule needs no repository and tests are simple.
+- **Assumption (escalation):** when a ticket is escalated, its own open-ticket count is excluded from
+  the current agent's load. Otherwise an agent at their limit would look ineligible for a ticket they
+  already hold.
+- **Assumption (ties):** the lowest agent id wins a tie, which makes the choice deterministic.
+
+### Tests
+`TicketTriageTests` (xUnit, `SupportDesk.UnitTests/Domain/Triage`) cover: requested/default/forced-Critical
+priority, windows for every priority and tier, the 1 h premium floor, a missing configured window, fewest
+open tickets, inactive agents, the limit boundary, specialists, ties, nobody eligible (still triaged),
+one-step escalation, due date from now, Critical rejected, and keeping or changing the agent on escalation.
+
+*Still to add here: SLA status (BR-8), the API endpoints, the migration and its index, and the UI.*
