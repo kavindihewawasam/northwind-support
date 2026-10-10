@@ -39,6 +39,9 @@ public sealed class TicketConfiguration : IEntityTypeConfiguration<Ticket>
 
         builder.Property(t => t.DueAtUtc).HasColumnType("datetime2(3)");
 
+        // Length of the current SLA window; null when the ticket has no due date.
+        builder.Property(t => t.SlaWindowMinutes);
+
         builder.Property(t => t.ResolvedAtUtc).HasColumnType("datetime2(3)");
 
         // A ticket is never silently detached from the rows that give it meaning.
@@ -56,6 +59,14 @@ public sealed class TicketConfiguration : IEntityTypeConfiguration<Ticket>
             .WithMany()
             .HasForeignKey(t => t.AssignedAgentId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        // Escalation history is an audit record: it is never deleted along with its ticket.
+        builder.HasMany(t => t.Escalations)
+            .WithOne()
+            .HasForeignKey(e => e.TicketId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.Navigation(t => t.Escalations).UsePropertyAccessMode(PropertyAccessMode.Field);
 
         builder.Ignore(t => t.IsOpen);
 
