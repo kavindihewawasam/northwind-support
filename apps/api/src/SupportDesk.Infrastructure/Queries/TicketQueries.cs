@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Common;
@@ -17,13 +18,12 @@ namespace SupportDesk.Infrastructure.Queries;
 public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQueries
 {
     /// <remarks>
-    /// Sorts and pages every ticket. The filter values bound into <paramref name="query"/>
-    /// (search, status, priority, category, customer, agent, unassigned-only) are not applied
-    /// yet: server-side filtering is still to be built.
+    /// Filters, counts, sorts and pages in one SQL query. Each supplied filter adds a WHERE
+    /// condition (AND), and the total count is taken from the filtered set, so the pager is correct.
     /// </remarks>
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
-        var tickets = TicketsWithLabels();
+        var tickets = ApplyFilters(TicketsWithLabels(), query);
 
         var totalCount = await tickets.CountAsync(ct);
 
@@ -116,6 +116,59 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
         join category in db.Set<Category>() on ticket.CategoryId equals category.Id
         from agent in db.Set<Agent>().Where(a => a.Id == ticket.AssignedAgentId).DefaultIfEmpty()
         select new TicketWithLabels { Ticket = ticket, Customer = customer, Category = category, Agent = agent };
+
+    /// <summary>
+    /// Applies every filter the caller supplied. Each one is a WHERE condition, so they combine
+    /// with AND, and all of it runs in the database before counting and paging.
+    /// </summary>
+    private static IQueryable<TicketWithLabels> ApplyFilters(IQueryable<TicketWithLabels> source, TicketQuery query) =>
+        Predicates(query).Aggregate(source, (current, predicate) => current.Where(predicate));
+
+    /// <summary>
+    /// One condition per supplied filter. Adding a filter (e.g. slaStatus) means adding one
+    /// <c>yield return</c> here; the rest of the query does not change.
+    /// </summary>
+    private static IEnumerable<Expression<Func<TicketWithLabels, bool>>> Predicates(TicketQuery query)
+    {
+        if (query.Status is { } status)
+        {
+            yield return x => x.Ticket.Status == status;
+        }
+
+        if (query.Priority is { } priority)
+        {
+            yield return x => x.Ticket.Priority == priority;
+        }
+
+        if (query.CategoryId is { } categoryId)
+        {
+            yield return x => x.Ticket.CategoryId == categoryId;
+        }
+
+        if (query.CustomerId is { } customerId)
+        {
+            yield return x => x.Ticket.CustomerId == customerId;
+        }
+
+        if (query.AssignedAgentId is { } agentId)
+        {
+            yield return x => x.Ticket.AssignedAgentId == agentId;
+        }
+
+        if (query.UnassignedOnly)
+        {
+            yield return x => x.Ticket.AssignedAgentId == null;
+        }
+
+        // Trimmed; a blank search is ignored.
+        if (query.Search?.Trim() is { Length: > 0 } term)
+        {
+            yield return x =>
+                x.Ticket.Title.Contains(term)
+                || x.Ticket.Reference.Contains(term)
+                || x.Customer.Name.Contains(term);
+        }
+    }
 
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)
     {

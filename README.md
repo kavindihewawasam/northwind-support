@@ -107,3 +107,41 @@ and 40 tickets across every status, priority and SLA state.
 | Browser warns about the certificate | `dotnet dev-certs https --trust`, or use the web app, which proxies |
 | Web app shows "Unable to load tickets" | The API is not running, or `VITE_API_PROXY_TARGET` points at the wrong port |
 | SQL Server slow on Apple Silicon | Enable Rosetta in Docker Desktop → Settings → General |
+
+
+## Task 1.1: DEFECT-117 (filters sometimes do not take effect)
+
+**Root cause.** The effect in `useTicketList` that loads tickets only depended on
+`search`, `page` and `pageSize`. Changing status, priority, category, customer, agent,
+unassigned-only or sort updated state but never triggered a request; the next search
+keystroke re-ran the effect and sent whatever the filters were by then. An
+`eslint-disable` comment ("filters object identity changes every render") hid the
+missing-dependency warning, and its reasoning was wrong: `filters` comes from `useState`.
+
+**Fix.** The request is built from a `query` state that holds the *whole* filters object.
+Dropdowns, checkbox, sort and paging update `query` immediately; only search-text changes
+are debounced (300 ms). Stale responses are ignored. No forced reload, remount key or
+in-memory filtering.
+
+**Why the SLA filter needs no special wiring.** `query` is the full filters object, so a
+new filter (e.g. `slaStatus`) is added to the `TicketFilters` type and the filter bar and is
+sent automatically. The hook does not change.
+
+**How to verify.** `npm test` (the `useTicketList` tests fail on the original code: 7 of 10
+failed with "expected 2 calls, got 1", and pass on the fix). In the browser, open
+DevTools > Network, change Status: a request with `status=InProgress` appears immediately;
+type a word quickly: one request about 300 ms after the last key.
+
+**Decisions.** Debounce only the text input (debouncing dropdowns would feel laggy).
+Rejected: forced reload / remount key / in-memory filtering (hide the effect, not the cause);
+listing every filter by hand in the effect dependencies (easy to forget for the next filter).
+
+**AI usage (Task 1.1).** Used an AI assistant to find the root cause and draft the fix and
+tests. I verified the diagnosis myself by reproducing the bug in the Network tab and by
+seeing the new tests fail on the original code. The first fix it proposed was wrong: it sent
+a stale request on every keystroke (my tests caught it: 2 failed, expecting 1 call but getting
+2 and 4). The second version failed the `react-hooks/set-state-in-effect` lint rule, so
+`isLoading` is now derived instead of set inside the effect. Generated code was verified
+with the tests, lint, typecheck and manual checks in the browser.
+
+
