@@ -24,6 +24,7 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
         var tickets = ApplyFilters(TicketsWithLabels(), query);
+        // var tickets = TicketsWithLabels();  this line is used to test TicketQueriesFilterTests.cs Make sure the tests are meaningful
 
         var totalCount = await tickets.CountAsync(ct);
 

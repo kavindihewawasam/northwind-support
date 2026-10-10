@@ -190,7 +190,13 @@ Results: `totalCount: 7`, `totalPages: 3`, 3 items, all `InProgress`. A blank se
 - Search terms are not split into words: the whole trimmed text is matched as one phrase.
 
 **Tests.** Backend tests for exact-match priority, a combination of filters, and a search on
-customer name. (Add the file name and the command, `npm test`, once written.)
+customer name. `TicketQueriesFilterTests` run the real `TicketQueries` against in-memory SQLite
+(7 tests): exact-match priority, a combination of filters, search on customer name, search on
+reference and title, trimmed/blank search, and count/pages for the filtered set. I checked the
+tests are meaningful by temporarily disabling `ApplyFilters`: 6 of 7 failed. Run with
+`dotnet test apps/api/tests/SupportDesk.UnitTests --filter TicketQueriesFilterTests` or `npm test`.
+SQLite's text matching is case-sensitive, unlike SQL Server's default collation, so the search
+tests use matching case.
 
 **AI usage (Task 1.2).** Used an AI assistant to design the predicate approach and write the
 code. Verification: I called the API with each filter, checked `totalCount` and `totalPages`
