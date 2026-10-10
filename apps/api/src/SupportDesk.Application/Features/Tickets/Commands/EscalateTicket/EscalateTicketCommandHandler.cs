@@ -23,9 +23,13 @@ public sealed class EscalateTicketCommandHandler(
     GetTicketEscalationsQueryHandler getEscalations,
     ILogger<EscalateTicketCommandHandler> logger)
 {
+    private const int EscalatedByMaxLength = 100;
+
+    /// <param name="escalatedBy">The signed-in agent, taken from the token by the caller.</param>
     /// <exception cref="NotFoundException">The ticket does not exist.</exception>
     /// <exception cref="ConflictException">The ticket is Critical, resolved or closed.</exception>
-    public async Task<EscalationResultDto> HandleAsync(int id, EscalateTicketRequest request, CancellationToken ct)
+    public async Task<EscalationResultDto> HandleAsync(
+        int id, EscalateTicketRequest request, string escalatedBy, CancellationToken ct)
     {
         var ticket = await tickets.GetByIdAsync(id, ct) ?? throw new NotFoundException("Ticket", id);
 
@@ -57,8 +61,15 @@ public sealed class EscalateTicketCommandHandler(
             ticket.AssignedAgentId,
             new TriageContext(category, isPremium, now, agents));
 
+        var actor = escalatedBy.Trim();
+
+        if (actor.Length > EscalatedByMaxLength)
+        {
+            actor = actor[..EscalatedByMaxLength];
+        }
+
         ticket.Escalate(
-            request.EscalatedBy,
+            actor,
             request.Reason,
             decision.Priority,
             decision.DueAtUtc,
@@ -70,7 +81,7 @@ public sealed class EscalateTicketCommandHandler(
 
         logger.LogInformation(
             "Ticket {Reference} escalated to {Priority} by {EscalatedBy}.",
-            ticket.Reference, decision.Priority, request.EscalatedBy);
+            ticket.Reference, decision.Priority, actor);
 
         var updated = await getTicket.HandleAsync(id, ct);
         var history = await getEscalations.HandleAsync(id, ct);

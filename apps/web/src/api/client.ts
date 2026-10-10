@@ -1,3 +1,4 @@
+import { clearSession, getSession } from '../auth/session';
 import type { ProblemDetails } from '../types/api';
 
 /**
@@ -25,20 +26,37 @@ export class ApiError extends Error {
   }
 }
 
+let onUnauthorized: (() => void) | undefined;
+
+/** Called when any request comes back 401, so the app can end the session and show the login page. */
+export function setUnauthorizedHandler(handler: (() => void) | undefined): void {
+  onUnauthorized = handler;
+}
+
 /**
- * The single place that talks to the API. Returns parsed JSON, or throws an
- * {@link ApiError} that callers can show to the user.
+ * The single place that talks to the API. Attaches the signed-in agent's token, returns parsed
+ * JSON, or throws an {@link ApiError} that callers can show to the user.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const session = getSession();
+
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(session ? { Authorization: `Bearer ${session.token}` } : {}),
       ...(init?.headers ?? {}),
     },
   });
 
   if (!response.ok) {
+    // A 401 from the login call itself just means "wrong credentials"; anywhere else it means
+    // the token is missing, wrong or expired, so the session ends.
+    if (response.status === 401 && !path.startsWith('/auth/login')) {
+      clearSession();
+      onUnauthorized?.();
+    }
+
     const problem = await readProblem(response);
 
     throw new ApiError(

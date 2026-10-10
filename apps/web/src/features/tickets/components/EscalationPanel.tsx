@@ -7,7 +7,6 @@ import type { EscalationResult, TicketDetail, TicketPriority } from '../../../ty
 // The same limits the API enforces, so a request that would be rejected is never sent.
 const REASON_MIN = 5;
 const REASON_MAX = 500;
-const ACTOR_MAX = 100;
 
 const priorityOrder: TicketPriority[] = ['Low', 'Medium', 'High', 'Critical'];
 
@@ -16,16 +15,13 @@ interface EscalationPanelProps {
   onEscalated: (result: EscalationResult) => void;
 }
 
-type EscalationErrors = Partial<Record<'reason' | 'escalatedBy', string>>;
-
 /**
  * Escalates a ticket one priority level. Shows why it cannot be escalated instead of the form
  * when that is already known, and still reports it if the server rejects an escalation.
  */
 export function EscalationPanel({ ticket, onEscalated }: EscalationPanelProps) {
   const [reason, setReason] = useState('');
-  const [escalatedBy, setEscalatedBy] = useState('');
-  const [errors, setErrors] = useState<EscalationErrors>({});
+  const [reasonError, setReasonError] = useState<string>();
   const [isSaving, setIsSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
 
@@ -45,27 +41,24 @@ export function EscalationPanel({ ticket, onEscalated }: EscalationPanelProps) {
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const validationErrors = validate(reason, escalatedBy);
-    setErrors(validationErrors);
+    const validationError = validate(reason);
+    setReasonError(validationError);
     setSubmitError(undefined);
 
-    if (Object.keys(validationErrors).length > 0) {
+    if (validationError) {
       return;
     }
 
     setIsSaving(true);
 
     try {
-      const result = await ticketsApi.escalateTicket(ticket.id, {
-        reason: reason.trim(),
-        escalatedBy: escalatedBy.trim(),
-      });
+      const result = await ticketsApi.escalateTicket(ticket.id, { reason: reason.trim() });
 
       setReason('');
       onEscalated(result);
     } catch (caught) {
-      if (caught instanceof ApiError && Object.keys(caught.fieldErrors).length > 0) {
-        setErrors(fromApiErrors(caught.fieldErrors));
+      if (caught instanceof ApiError && caught.fieldErrors.Reason?.[0]) {
+        setReasonError(caught.fieldErrors.Reason[0]);
       }
 
       setSubmitError(toErrorMessage(caught, 'Could not escalate the ticket.'));
@@ -79,26 +72,10 @@ export function EscalationPanel({ ticket, onEscalated }: EscalationPanelProps) {
       <h2>Escalate</h2>
 
       <Field
-        id="escalated-by"
-        label="Escalated by"
-        error={errors.escalatedBy}
-        hint="Your name, until sign-in replaces this."
-      >
-        {(fieldProps) => (
-          <input
-            {...fieldProps}
-            type="text"
-            value={escalatedBy}
-            onChange={(event) => setEscalatedBy(event.target.value)}
-          />
-        )}
-      </Field>
-
-      <Field
         id="escalation-reason"
         label="Reason"
-        error={errors.reason}
-        hint={`${REASON_MIN} to ${REASON_MAX} characters (${reason.trim().length}/${REASON_MAX}).`}
+        error={reasonError}
+        hint={`${REASON_MIN} to ${REASON_MAX} characters (${reason.trim().length}/${REASON_MAX}). Recorded under your name.`}
       >
         {(fieldProps) => (
           <textarea
@@ -138,37 +115,16 @@ function blockedMessage(ticket: TicketDetail): string | undefined {
   return undefined;
 }
 
-function validate(reason: string, escalatedBy: string): EscalationErrors {
-  const errors: EscalationErrors = {};
-  const trimmedReason = reason.trim();
-  const trimmedActor = escalatedBy.trim();
+function validate(reason: string): string | undefined {
+  const length = reason.trim().length;
 
-  if (trimmedReason.length < REASON_MIN) {
-    errors.reason = `Give a reason of at least ${REASON_MIN} characters.`;
-  } else if (trimmedReason.length > REASON_MAX) {
-    errors.reason = `Keep the reason to ${REASON_MAX} characters or fewer.`;
+  if (length < REASON_MIN) {
+    return `Give a reason of at least ${REASON_MIN} characters.`;
   }
 
-  if (trimmedActor.length === 0) {
-    errors.escalatedBy = 'Enter who is escalating this ticket.';
-  } else if (trimmedActor.length > ACTOR_MAX) {
-    errors.escalatedBy = `Keep the name to ${ACTOR_MAX} characters or fewer.`;
+  if (length > REASON_MAX) {
+    return `Keep the reason to ${REASON_MAX} characters or fewer.`;
   }
 
-  return errors;
-}
-
-/** The API names fields in PascalCase; the form uses camelCase. */
-function fromApiErrors(fieldErrors: Record<string, string[]>): EscalationErrors {
-  const errors: EscalationErrors = {};
-
-  for (const [field, messages] of Object.entries(fieldErrors)) {
-    const key = field.charAt(0).toLowerCase() + field.slice(1);
-
-    if (key === 'reason' || key === 'escalatedBy') {
-      errors[key] = messages[0];
-    }
-  }
-
-  return errors;
+  return undefined;
 }

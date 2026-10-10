@@ -12,4 +12,10 @@ public sealed class AgentRepository(SupportDbContext db) : IAgentRepository
         db.Set<Agent>()
             .Include(a => a.Specializations)
             .FirstOrDefaultAsync(a => a.Id == id, ct);
+
+    /// <summary>Not tracked: signing in only reads.</summary>
+    public Task<Agent?> GetByEmailAsync(string email, CancellationToken ct) =>
+        db.Set<Agent>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Email == email, ct);
 }

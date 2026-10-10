@@ -131,7 +131,7 @@ export interface TicketEscalation {
 
 export interface EscalateTicketPayload {
   reason: string;
-  escalatedBy: string;
+  // escalatedBy: string;
 }
 
 /** The updated ticket together with the escalation that was just recorded. */
@@ -185,4 +185,23 @@ export interface ProblemDetails {
   detail?: string;
   traceId?: string;
   errors?: Record<string, string[]>;
+}
+
+
+/** The signed-in agent. */
+export interface AuthUser {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  accessToken: string;
+  expiresAtUtc: string;
+  user: AuthUser;
 }

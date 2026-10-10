@@ -8,6 +8,7 @@ using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicketEscalations;
 using SupportDesk.Application.Features.Tickets.Queries.SearchTickets;
+using SupportDesk.Presentation.Security;
 
 namespace SupportDesk.Presentation.Controllers;
 
@@ -64,15 +65,25 @@ public sealed class TicketsController : ControllerBase
 
     /// <summary>
     /// Escalates a ticket one priority level, restarts its SLA window and re-evaluates its owner.
-    /// 400 invalid reason or missing actor, 404 unknown ticket, 409 Critical or resolved/closed.
+    /// Who escalated it comes from the signed-in agent's token. 400 invalid reason, 404 unknown
+    /// ticket, 409 Critical or resolved/closed.
     /// </summary>
     [HttpPost("{id:int}/escalate")]
-    public Task<EscalationResultDto> Escalate(
+    public async Task<ActionResult<EscalationResultDto>> Escalate(
         int id,
         EscalateTicketRequest request,
         [FromServices] EscalateTicketCommandHandler handler,
-        CancellationToken ct) =>
-        handler.HandleAsync(id, request, ct);
+        CancellationToken ct)
+    {
+        var agent = User.ToCurrentUser();
+
+        if (agent is null)
+        {
+            return Unauthorized();
+        }
+
+        return await handler.HandleAsync(id, request, agent.FullName, ct);
+    }
 
     /// <summary>A ticket's escalation history, newest first.</summary>
     [HttpGet("{id:int}/escalations")]

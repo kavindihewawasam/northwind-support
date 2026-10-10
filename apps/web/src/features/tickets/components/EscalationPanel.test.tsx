@@ -13,8 +13,7 @@ vi.mock('../../../api/tickets', () => ({
 
 const escalateTicket = vi.mocked(ticketsApi.escalateTicket);
 
-function fillAndSubmit(reason: string, actor = 'kavindi') {
-  fireEvent.change(screen.getByLabelText(/escalated by/i), { target: { value: actor } });
+function fillAndSubmit(reason: string) {
   fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: reason } });
   fireEvent.click(screen.getByRole('button', { name: /escalate to high/i }));
 }
@@ -35,7 +34,7 @@ describe('EscalationPanel', () => {
     expect(onEscalated).not.toHaveBeenCalled();
   });
 
-  it('sends the trimmed reason and reports the result', async () => {
+  it('sends only the trimmed reason (who escalates comes from the token) and reports the result', async () => {
     const onEscalated = vi.fn();
     const result = { ticket: ticketDetail({ priority: 'High' }), escalation: ticketEscalation() };
     escalateTicket.mockResolvedValue(result);
@@ -44,10 +43,7 @@ describe('EscalationPanel', () => {
     fillAndSubmit('  Customer is blocked  ');
 
     await waitFor(() => expect(onEscalated).toHaveBeenCalledWith(result));
-    expect(escalateTicket).toHaveBeenCalledWith(12, {
-      reason: 'Customer is blocked',
-      escalatedBy: 'kavindi',
-    });
+    expect(escalateTicket).toHaveBeenCalledWith(12, { reason: 'Customer is blocked' });
   });
 
   it('shows a 409 from the server and leaves the ticket unchanged', async () => {
