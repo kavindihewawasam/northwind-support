@@ -142,8 +142,8 @@ indicator should serve list and detail. `slaPresentation` (label, symbol, colour
 place the states are named, used by the badge and by the filter options. A test checks that every label
 and symbol is distinct.
 
-**The escalation form.** The limits (5 to 500, 100) appear once as constants and match the API validator.
-The form is not rendered when the ticket is already Critical or resolved/closed, because a disabled form
+**The escalation form.** The limits (5 to 500) appear once as constants and match the API validator. The
+form is not rendered when the ticket is already Critical or resolved/closed, because a disabled form
 invites "why?"; the message says why. I kept the server-rejection path anyway, since the page can be
 stale, and tested it with a mocked 409.
 
@@ -161,12 +161,113 @@ only the history needs another request.
 
 ## Task 3: Login and authentication
 
-TODO: write this after Task 3 (or write "not finished" and what is left). Cover: where credentials are
-stored and why (column on Agent or a Users table), the hashing choice, token lifetime, where the token is
-kept in the browser and the trade-off, how `escalatedBy` moved to the token, and how the 401 handling works.
+### Reading the brief
+
+Nothing existed: no users, no tokens, every endpoint open. The parts I thought were hard were not the
+login form but the details around it: not leaking whether the email or the password was wrong, protecting
+*every* endpoint in one place, keeping the signing key out of code, and making `escalatedBy` impossible
+to fake. On the frontend I had one advantage: every call already goes through a single `request`
+function, so attaching a token and reacting to a 401 each need to be written once.
+
+### Where credentials live
+
+I added a nullable `PasswordHash` column to `Agent`. The alternative was a separate `Users` table, but the
+agents are the only users, each has exactly one login and there are no roles, so a second table would be
+a join with nothing to justify it. The column is nullable so that an agent without a password simply
+cannot sign in, which is also what happens to the inactive agent.
+
+### Hashing
+
+I used ASP.NET Identity's `PasswordHasher` (PBKDF2, a new random salt for every password, the iteration
+count stored with the hash). I considered BCrypt, which needs an extra package for no real gain, and
+writing PBKDF2 myself, which is exactly the "home-made" thing the brief rules out. The hasher sits behind
+a small `IPasswordHasher` interface so the login handler can be tested with a mock, and the real hasher has
+its own tests (the hash is not the password, two hashes of the same password differ, verify passes and
+fails correctly).
+
+### One message for every failure
+
+Login returns the same 401 and the same words for an unknown email, a wrong password and an inactive
+agent. That is not enough on its own: an unknown email would still return faster, because there is no
+hash to check. So the hasher always does the work, against a dummy hash when there is no real one, and a
+test checks that the check really runs for an unknown email. I also capped the password at 128 characters
+so nobody can make the server hash an enormous string.
+
+### Where the code lives
+
+The login handler and the interfaces are in the application layer; the hasher is in infrastructure; the
+token creation is in the web project, because that is the only project that references the JWT package.
+That avoided adding a package to a second project.
+
+### Enforcing it centrally
+
+I used a fallback authorization policy ("must be authenticated") instead of `[Authorize]` on each
+controller. With attributes, a new controller that forgets one is silently open; with the fallback policy
+the default is closed and the one exception, login, has to say `[AllowAnonymous]`. Swagger is middleware
+rather than an endpoint, so it stays open without extra work.
+
+### The signing key and the lifetime
+
+The key comes from configuration. Development has a clearly-labelled fixture in
+`appsettings.Development.json`, in the same way the database password already was; any other environment
+must set `Jwt__SigningKey`, and the API refuses to start without a key of at least 32 bytes, so a missing
+key is a loud startup error instead of a weak default. I chose a 60-minute lifetime. There are no refresh
+tokens (the brief says not to build them), so the lifetime is also the session length: short enough to
+limit what a stolen token can do, long enough not to interrupt normal work, and it is one setting.
+
+### A problem I would have missed
+
+My first idea was to hash the development password in the existing seeder. But that seeder returns early
+when tickets already exist, so a database that was seeded before login existed (like mine) would have
+agents with no passwords and no way in. I added a separate `AgentCredentialSeeder` that runs on every
+start in Development and only fills in agents that have no password.
+
+### Who escalated
+
+Before Task 3, `escalatedBy` was a free-text field. Now it is not in the request at all: the controller
+reads the agent's name from the token and passes it to the handler. A client can no longer record someone
+else's name; I tested this by sending a different name in the body. Agent names can be 200 characters but
+the history column is 100, so the handler cuts it to fit, with a test.
+
+### Frontend
+
+- **Where the token lives.** `sessionStorage`: it survives a reload but not a closed tab. Memory only would
+  log you out on every refresh, and `localStorage` keeps the token around longer for no benefit here. The
+  honest downside is that a script injected into the page could read it; an httpOnly cookie avoids that
+  but brings CSRF handling, which seemed more than the task asked for. I wrote the trade-off in the README.
+- **One place for the token and for 401s.** The API client attaches the token and, on any 401 other than
+  the login call, clears the session and tells the app. The login call is excluded because a 401 there just
+  means "wrong password"; treating it as an expired session would have been a bug.
+- **Redirects without effects.** The provider holds the session in state; `RequireAuth` redirects when it is
+  empty and passes the page the visitor wanted. So an expired token, a manual logout and a first visit all
+  go through the same path, and signing in returns you where you were headed.
+- **Expired sessions.** When the session is read, one that has already expired is ignored and removed, so a
+  stale tab does not look signed in.
+
+### Testing
+
+I tested the login handler with mocks (wrong password gives the error and no token, unknown email gives
+the identical error, inactive agent, trimmed email), the real hasher on its own, and on the web the client
+(token attached, 401 ends the session, rejected login does not), the session expiry, the route guard and
+the login form. The one thing I did not automate is "401 without a token, 200 with one" through the real
+pipeline; I checked it by hand. An integration test with `WebApplicationFactory` would be my next step.
+
+### What I would do with more time
+
+- Keep the token in an httpOnly cookie, or at least check on each request that the agent is still active
+  (today a deactivated agent's token keeps working until it expires).
+- Rate-limit and lock out repeated failed logins.
+- Add an Authorize button to Swagger and an integration test for the 401/200 behaviour.
+- Never seed a known password outside a local run, and keep the signing key in a secret store.
+
+---
 
 ## Task 4: Dockerise the API
 
-TODO: write this after Task 4 (or write "not finished"). Cover: the multi-stage build and the restore
-cache, running as a non-root user, where configuration and secrets come from, how migrations run here and
-how they would run in a real deployment, and the image size.
+**Not done.** It was optional and I chose to spend the remaining time re-testing Tasks 1 to 3 and writing
+them up properly. What I would do: a multi-stage Dockerfile with the restore step before copying the
+source (so it is cached), a non-root user on port 8080, no configuration baked in, a compose service that
+waits for SQL Server to be healthy, and a `/health` endpoint outside authentication. One thing I already
+know I would have to change: the `Sla` section only exists in `appsettings.Development.json`, so a
+container that is not running as Development would not start until it is moved into `appsettings.json`,
+and `Jwt__SigningKey` would have to come from the environment.
