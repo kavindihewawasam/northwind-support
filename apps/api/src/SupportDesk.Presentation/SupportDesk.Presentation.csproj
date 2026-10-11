@@ -15,5 +15,9 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+    <ItemGroup>
+    <!-- The development fixtures (database password, signing key, demo password) must never be part of a published image. -->
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
 
 </Project>

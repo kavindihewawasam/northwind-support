@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using SupportDesk.Application;
@@ -10,6 +11,7 @@ using SupportDesk.Domain.Triage;
 using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
+using SupportDesk.Presentation.Health;
 using SupportDesk.Presentation.Middleware;
 using SupportDesk.Presentation.Security;
 
@@ -77,6 +79,8 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
 builder.Services.AddAuthorization(options =>
     options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
 
+builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
+
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
@@ -88,8 +92,13 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+}
 
-    // Keeps a developer machine one command away from a working database.
+// A developer machine is one command away from a working database, and the Docker demo asks for
+// the same with Database__MigrateAndSeedOnStartup=true. A real deployment would leave this off and
+// run migrations as a separate, deliberate step (see the README).
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("Database:MigrateAndSeedOnStartup"))
+{
     await app.MigrateAndSeedAsync();
 }
 
@@ -99,5 +108,10 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Reports whether the database can be reached. Open without a token, and configured here with
+// everything else rather than on a controller.
+app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = HealthResponseWriter.WriteAsync })
+    .AllowAnonymous();
 
 app.Run();
