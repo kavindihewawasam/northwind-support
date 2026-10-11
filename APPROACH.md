@@ -1,7 +1,8 @@
 # Approach
 
 How I approached each task, in the order I did it: what I read, what I tried, what I decided and why.
-The README has the reference material (rules, endpoints, database, tests); this file is the thinking.
+The README has the reference material (rules, endpoints, database, tests, how to run); this file is the
+thinking.
 
 ## How I worked
 
@@ -79,7 +80,9 @@ each rule testable on its own, and "no eligible agent" is just a decision with n
 
 The `Sla` section was already in `appsettings.Development.json`, so I bound it to `SlaPolicy` instead of
 adding constants. I left out default values on purpose: if a priority is missing from the configuration
-the code throws a clear error instead of quietly using a hidden number.
+the code throws a clear error instead of quietly using a hidden number. (In Task 4 I moved the section
+into `appsettings.json`, because a container that does not run as Development never loads the
+Development file.)
 
 ### Edge cases I thought about
 
@@ -203,8 +206,8 @@ That avoided adding a package to a second project.
 
 I used a fallback authorization policy ("must be authenticated") instead of `[Authorize]` on each
 controller. With attributes, a new controller that forgets one is silently open; with the fallback policy
-the default is closed and the one exception, login, has to say `[AllowAnonymous]`. Swagger is middleware
-rather than an endpoint, so it stays open without extra work.
+the default is closed and the exceptions, login and later `/health`, have to say `AllowAnonymous`.
+Swagger is middleware rather than an endpoint, so it stays open without extra work.
 
 ### The signing key and the lifetime
 
@@ -220,7 +223,7 @@ limit what a stolen token can do, long enough not to interrupt normal work, and 
 My first idea was to hash the development password in the existing seeder. But that seeder returns early
 when tickets already exist, so a database that was seeded before login existed (like mine) would have
 agents with no passwords and no way in. I added a separate `AgentCredentialSeeder` that runs on every
-start in Development and only fills in agents that have no password.
+start (in Development, and later in the Docker demo) and only fills in agents that have no password.
 
 ### Who escalated
 
@@ -264,10 +267,71 @@ pipeline; I checked it by hand. An integration test with `WebApplicationFactory`
 
 ## Task 4: Dockerise the API
 
-**Not done.** It was optional and I chose to spend the remaining time re-testing Tasks 1 to 3 and writing
-them up properly. What I would do: a multi-stage Dockerfile with the restore step before copying the
-source (so it is cached), a non-root user on port 8080, no configuration baked in, a compose service that
-waits for SQL Server to be healthy, and a `/health` endpoint outside authentication. One thing I already
-know I would have to change: the `Sla` section only exists in `appsettings.Development.json`, so a
-container that is not running as Development would not start until it is moved into `appsettings.json`,
-and `Jwt__SigningKey` would have to come from the environment.
+### Reading the brief
+
+The Dockerfile itself is short. The parts that need thought are what must *not* be in the image, and what
+has to change in the app so it can run as something other than Development. Locally the API migrates,
+seeds and finds its settings because it runs as Development with `appsettings.Development.json`. A
+container should not depend on that file at all.
+
+### What I had to change in the app
+
+Three small things:
+
+- The `Sla` section only existed in the Development file. It is a business setting needed in every
+  environment, so I moved it to `appsettings.json` (still overridable by environment variables).
+- Migrating and seeding on start was tied to Development. I added a `Database:MigrateAndSeedOnStartup`
+  switch, so the container can run as Production (Swagger off) and still do it as a demo. Development
+  behaves as before.
+- `/health` did not exist. It tests the database connection and is mapped with `AllowAnonymous()` in
+  `Program.cs`, so it is configured centrally with the rest of the pipeline and the fallback policy still
+  protects everything else. It returns only status words, so an unauthenticated caller can never read a
+  connection string or an exception message.
+
+### Keeping secrets out
+
+I excluded `appsettings.Development.json` from the *published output* in the project file. That means it
+cannot end up in an image however the image is built, which is stronger than relying on `.dockerignore`
+alone (the `.dockerignore` still excludes `.env` and the rest). I checked it by listing the files inside
+the running container. The connection string, signing key and environment name come from environment
+variables in the compose file. Compose does have throwaway local defaults for the key and the demo
+password, the same way the database password already had one; I wrote that down in the README as a
+demo-only convenience, overridable in `.env`.
+
+### The restore layer
+
+The restore step copies only `global.json`, the two shared props files and the four project files, and
+restores before the source is copied. I considered copying everything and restoring once, which is simpler
+but repeats the restore on every code change. I checked that it works by editing a `.cs` file and
+rebuilding: the restore step came from cache and only publish ran again.
+
+### Non-root, port and certificates
+
+The runtime image already has a non-root user, so I switched to it with `USER` and kept plain HTTP on
+8080: HTTPS in the container is out of scope and the brief says not to ship certificates. I published it
+on host port 5080 so it does not clash with the local API on 5043. `whoami` inside the container prints
+`app`.
+
+### Compose
+
+The `api` service is built from the Dockerfile, reaches SQL Server by its service name (not `localhost`,
+which inside a container would be the API itself), and starts only when SQL Server reports healthy, using
+the health check that was already on the `sqlserver` service. I left `npm run db:up` alone: it starts only
+`sqlserver`, so local development is unchanged.
+
+### Migrations in real life
+
+The container migrates itself only because the brief wants one command to produce a working system. In the
+README I wrote down why I would not do that in production (several instances racing to migrate, an
+over-privileged database login at run time, a failed migration stopping every instance, and demo data and
+a known password in production) and what I would do instead: an idempotent script or a migration bundle,
+run as a separate pipeline step with a privileged account, while the API runs with a least-privilege
+login.
+
+### What I would do with more time
+
+- A container `HEALTHCHECK` (the runtime image has no `curl`, so it needs a tiny probe or a different
+  image) and a split between "alive" and "ready" endpoints.
+- A smoke test in CI that builds the image and calls `/health`.
+- Take the demo password and demo signing key out of the compose defaults, so the demo has to be given
+  them explicitly.

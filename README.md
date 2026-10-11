@@ -14,7 +14,7 @@ is in [`APPROACH.md`](APPROACH.md).
 | 1 | Defect fix and server-side filtering | Done |
 | 2 | Ticket escalation and assignment | Done (optional stretch 2.5, the SLA summary report, not built) |
 | 3 | Login and authentication | Done |
-| 4 | Dockerise the API (optional) | **Not done** (see Known limitations) |
+| 4 | Dockerise the API | Done |
 
 ## Development login credentials
 
@@ -24,13 +24,15 @@ is in [`APPROACH.md`](APPROACH.md).
 
 The same password works for `ben.osei@`, `priya.nair@`, `sara.lindqvist@` and `marcus.doyle@`
 (all `@northwind-support.example`). `yuki.tanaka@` is an inactive agent and cannot sign in (on purpose,
-useful to test). The password is a **local fixture**: it lives only in
-`appsettings.Development.json` (`Seed:AgentPassword`), is hashed before it is stored, and is only
-applied when the API runs in Development.
+useful to test). The password is a **local fixture**: it lives in `appsettings.Development.json`
+(`Seed:AgentPassword`) and as a demo default in `docker-compose.yml`, is hashed before it is stored, and
+is only applied when the API runs in Development or in the Docker demo (below).
 
 ## Run it
 
 **Prerequisites:** .NET SDK 10 (`global.json`), Node.js 22 (`.nvmrc`; 20.19+ works), Docker Desktop.
+
+**Option A: local API (development)**
 
 ```bash
 cp .env.example .env          # optional, every value has a working default
@@ -46,6 +48,9 @@ npm run web                   # terminal 2: React dev server
 | API | https://localhost:7043 (also http://localhost:5043) |
 | Swagger | https://localhost:7043/swagger (open; protected endpoints need a token, which Swagger does not send) |
 
+**Option B: API in a container** (see [Task 4](#task-4-docker)): `docker compose up --build`, API on
+http://localhost:5080, then `VITE_API_PROXY_TARGET=http://localhost:5080 npm run web`.
+
 In Development the API applies migrations, seeds demo data (5 categories, 6 customers, 6 agents, 40
 tickets) and gives every agent the development password. To start from an empty database:
 `npm run db:reset`, then `npm run db:up`, then `npm run api`.
@@ -60,7 +65,7 @@ npm run typecheck
 
 **Stop the API before running the .NET tests.** A running API locks its DLLs on Windows and the build
 fails with "file is locked by SupportDesk.Presentation". No test needs SQL Server.
-TODO: add the totals from your last `npm test` (backend and web) here.
+Current totals: **112 backend tests and 31 web tests, all passing**, with clean lint and typecheck.
 
 What is tested:
 
@@ -71,7 +76,7 @@ What is tested:
 - **Query filtering against a real database (SQLite):** exact-match priority, filter combinations, search
   on customer name, count and pages for the filtered set, SLA status filter.
 - **Handlers:** create with triage (including nobody eligible), escalate (404, 409 messages, owner kept or
-  changed, the signed-in agent recorded), login (below).
+  changed, the signed-in agent recorded), login.
 - **Authentication:** a wrong password gives a 401-type error and no token; an unknown email gives the
   identical error and still runs a password check; an inactive agent cannot sign in; the password hasher
   salts, verifies and rejects correctly and never stores the password.
@@ -83,14 +88,15 @@ What is tested:
 - **Architecture:** the EF model matches the latest migration.
 
 Not tested automatically: the `AtRisk` and `WithinSla` SQL filters (SQL Server's `DATEDIFF`, which SQLite
-does not have; the rules are covered by the evaluator tests and I checked the SQL by hand), and
-"a protected endpoint is 401 without a token and 200 with one" end to end (checked by hand; an
-integration test with `WebApplicationFactory` would add it).
+does not have; the rules are covered by the evaluator tests and I checked the SQL by hand);
+"a protected endpoint is 401 without a token and 200 with one" end to end, and `/health` (checked by hand;
+an integration test with `WebApplicationFactory` would add them).
 
 ## API at a glance
 
 | Endpoint | Description |
 | --- | --- |
+| `GET /health` | **Open.** Whether the database can be reached: `Healthy` (200) or `Unhealthy` (503). |
 | `POST /api/auth/login` | **Open.** Body `email`, `password`. Returns `accessToken`, `expiresAtUtc` and the `user`. 401 with the same message for an unknown email, a wrong password or an inactive agent. |
 | `GET /api/auth/me` | The signed-in agent (from the token), or 401. |
 | `GET /api/tickets` | Paged list. Filters: `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `slaStatus` (`NotApplicable`, `WithinSla`, `AtRisk`, `Breached`, `Met`); plus `sortBy`, `sortDirection`, `page`, `pageSize`. All applied in SQL before counting and paging. |
@@ -101,8 +107,9 @@ integration test with `WebApplicationFactory` would add it).
 | `PATCH /api/tickets/{id}/status` / `/assignment` | Change status / assignee (assignment is a manual override). |
 | `GET /api/customers` / `/api/agents` / `/api/categories` | Reference data |
 
-Every endpoint except `POST /api/auth/login` requires a valid token (`Authorization: Bearer ...`).
-Errors are `ProblemDetails`: 400 validation, 401 not signed in, 404 not found, 409 conflict or business rule.
+Every endpoint except `GET /health` and `POST /api/auth/login` requires a valid token
+(`Authorization: Bearer ...`). Errors are `ProblemDetails`: 400 validation, 401 not signed in, 404 not
+found, 409 conflict or business rule.
 
 ---
 
@@ -167,7 +174,7 @@ exactly this way.
 | BR-1 priority | The requested priority, Medium by default. A category with `ForcesCriticalPriority` is always Critical. |
 | BR-2 / BR-3 window | Due = time of triage + base window (Critical 4 h, High 8 h, Medium 24 h, Low 72 h). Premium customers get 0.5 of it, never under 1 h. |
 | BR-4 / BR-5 assignment | Eligible = active, specialised if the category has `RequiresSpecialist`, strictly below `MaxOpenTickets`. Choose the fewest open tickets (not Resolved/Closed); the lowest agent id wins a tie. Nobody eligible: the ticket is created unassigned with a reason (201, not an error). |
-| BR-6 configurable | Windows, premium multiplier, floor and at-risk threshold come from the `Sla` section of `appsettings` (bound to `SlaPolicy`, no defaults in code). Behaviour comes from the category flags; no category name appears in code. |
+| BR-6 configurable | Windows, premium multiplier, floor and at-risk threshold come from the `Sla` section of `appsettings.json` (bound to `SlaPolicy`, no defaults in code, overridable with environment variables such as `Sla__BaseWindowHours__Critical`). Behaviour comes from the category flags; no category name appears in code. |
 | BR-7 escalation | One priority level up; due date recomputed from now; keep the current agent while still eligible, otherwise choose again; an immutable history row. Critical and Resolved/Closed tickets cannot be escalated. |
 | BR-8 SLA status | Derived, never stored: NotApplicable (no due date), Met, Breached, AtRisk (25% or less of the window left), WithinSla. "Now" is a parameter. |
 
@@ -204,6 +211,8 @@ Migration `AddTicketEscalations`:
 - Reads use `AsNoTracking`, narrow projections and no per-row queries (agent workload is one subquery,
   not one query per agent).
 
+Migration `AddAgentPasswordHash` (Task 3) adds the nullable `Agents.PasswordHash` (256) column.
+
 ### Frontend
 
 - `SlaIndicator` is the single SLA component, used in the list and the detail page. Each state has a word
@@ -225,13 +234,13 @@ Migration `AddTicketEscalations`:
 
 ### How it works
 
-- **Credential storage (AU-1).** A nullable `Agents.PasswordHash` column (migration `AddAgentPasswordHash`).
-  An agent without a hash cannot sign in.
+- **Credential storage (AU-1).** A nullable `Agents.PasswordHash` column. An agent without a hash cannot
+  sign in.
 - **Hashing (AU-2).** ASP.NET Identity's `PasswordHasher` (PBKDF2 with a random salt per password and a
   stored iteration count) behind an `IPasswordHasher` interface. Nothing is hand-written.
-- **Development credentials (AU-3).** `AgentCredentialSeeder` runs at startup in Development and hashes
-  `Seed:AgentPassword` for every agent that has no hash. It runs on every start, so a database seeded
-  before login existed also gets credentials.
+- **Development credentials (AU-3).** `AgentCredentialSeeder` runs at startup (Development, or the Docker
+  demo) and hashes `Seed:AgentPassword` for every agent that has no hash. It runs on every start, so a
+  database seeded before login existed also gets credentials.
 - **Login (AU-4).** `POST /api/auth/login` returns an HS256 signed JWT (claims `sub`, `name`, `email`),
   its expiry and the user. An unknown email, a wrong password and an inactive agent all return the *same*
   401 and the same message. A password check always runs, against a dummy hash when the email is unknown,
@@ -239,8 +248,8 @@ Migration `AddTicketEscalations`:
   nobody can make the server hash a huge string.
 - **Current user (AU-5).** `GET /api/auth/me` reads the signed-in agent from the token's claims.
 - **Central enforcement (AU-6).** A fallback authorization policy requires an authenticated user for every
-  endpoint; only login is `[AllowAnonymous]`. A new controller is protected without anyone remembering an
-  attribute. Swagger stays open.
+  endpoint; only login (and `/health`, see Task 4) opt out. A new controller is protected without anyone
+  remembering an attribute. Swagger stays open.
 - **Signing key (AU-7).** `Jwt:SigningKey` comes from configuration, never from code. Development has a
   clearly-labelled local fixture in `appsettings.Development.json`; any other environment must set the
   environment variable `Jwt__SigningKey` (listed in `.env.example`), and the API refuses to start without
@@ -267,6 +276,93 @@ Migration `AddTicketEscalations`:
 
 ---
 
+## Task 4: Docker
+
+### Build and run
+
+```bash
+docker compose up --build        # SQL Server first, then the API on http://localhost:5080
+docker compose down -v           # stop and wipe the database volume
+```
+
+To use the container instead of `npm run api`, point the web app at it (`npm run web` as usual otherwise):
+
+```powershell
+$env:VITE_API_PROXY_TARGET = "http://localhost:5080"; npm run web      # PowerShell
+```
+```bash
+VITE_API_PROXY_TARGET=http://localhost:5080 npm run web                 # bash
+```
+
+Then sign in at http://localhost:5173 with the credentials above. The container runs as Production, so
+Swagger is off; use the web app. `npm run db:up` still starts only SQL Server.
+
+### What is in the image
+
+- **Multi-stage `apps/api/Dockerfile`**, built from the repo root: the .NET 10 SDK compiles and publishes,
+  the ASP.NET runtime image runs it. The files that decide what is restored (`global.json`,
+  `Directory.Build.props`, `Directory.Packages.props` and the four project files) are copied and restored
+  *before* the source, so editing code does not repeat the restore.
+- **`.dockerignore`** excludes `bin/`, `obj/`, `node_modules/`, `.git/`, `.env` and the web app (and tests,
+  docs and tooling).
+- Runs as the image's **non-root** user on **HTTP port 8080**, published on host port 5080. No
+  certificates.
+- **Nothing is baked in.** `appsettings.Development.json` (database password, dev signing key, demo
+  password) is excluded from the published output (`CopyToPublishDirectory="Never"`), so it cannot end up
+  in an image. The `Sla` section moved to `appsettings.json` because a Production container does not load
+  the Development file.
+- `docker-compose.yml` has an `api` service built from the Dockerfile, reaching SQL Server by its service
+  name (`sqlserver`) and started only when SQL Server reports healthy (`depends_on` with
+  `condition: service_healthy`).
+
+### Environment variables
+
+| Variable | Purpose | Default in compose |
+| --- | --- | --- |
+| `ASPNETCORE_ENVIRONMENT` (from `API_ENVIRONMENT`) | Environment name | `Production` |
+| `ConnectionStrings__Default` | Database, by service name `sqlserver` | built from `MSSQL_SA_PASSWORD` |
+| `Jwt__SigningKey` | Token signing key (32+ characters) | a demo value; override it in `.env` |
+| `Seed__AgentPassword` | Demo agent password | the dev fixture |
+| `Database__MigrateAndSeedOnStartup` | Apply migrations and seed on start | `true` (demo only) |
+
+All of them are listed in `.env.example`. The compose defaults are throwaway local values, like the SQL
+Server password that was already there.
+
+### Migrations: this demo versus a real deployment
+
+In the container, `Database__MigrateAndSeedOnStartup=true` makes the API apply migrations and seed demo
+data on an empty volume, so one command gives a working system. **I would not do this in a real
+deployment:** several instances starting together would race to migrate; the application's database login
+would need schema-changing rights it should not have at run time; a slow or failed migration would stop
+every instance from starting; and seeding demo data and a known password in production would be wrong.
+Instead, migrations run as a separate, deliberate step before the new version rolls out: generate an
+idempotent script (`dotnet ef migrations script --idempotent`) or a migration bundle
+(`dotnet ef migrations bundle`) in the pipeline and run it with a privileged account, while the API runs
+with a least-privilege login and just starts.
+
+### `/health`
+
+`GET /health` reports whether the database can be reached (`Healthy`, or `Unhealthy` with a 503). It is
+open without a token and is mapped in `Program.cs` with `AllowAnonymous()`, next to the rest of the
+pipeline (the fallback policy still protects everything else). It returns only status words, never
+exception text or connection details.
+
+### How each was checked
+
+- `docker compose down -v && docker compose up --build`: `/health` returned Healthy and, after signing in,
+  `/api/tickets` returned the 40 seeded tickets on an empty volume.
+- Changed one `.cs` file and ran `docker compose build api --progress=plain`: the `dotnet restore` step was
+  served from cache and only publish ran again.
+- Image size: `supportdesk-api:local` is TODO against TODO for `mcr.microsoft.com/dotnet/sdk:10.0`.
+- `docker compose exec api whoami` printed `app`, not `root`.
+- `docker compose exec api ls` shows no `appsettings.Development.json`.
+- `VITE_API_PROXY_TARGET=http://localhost:5080 npm run web`: signed in and the tickets loaded from the
+  container.
+- `/health` with SQL Server stopped (`docker compose stop sqlserver`) reported `Unhealthy`.
+  TODO: delete any line above that you did not actually run.
+
+---
+
 ## Design decisions (chosen, rejected, why)
 
 - **Rules as small classes in the domain, handlers kept thin.** Create and escalate call the same
@@ -275,8 +371,8 @@ Migration `AddTicketEscalations`:
 - **A read-only `ITriageInputs` seam.** The rules receive plain values (category flags, tier, agent
   candidates). Rejected: loading agents and tickets through the repositories and counting in C# (one
   count per agent), and widening the repository interfaces.
-- **Configuration in the existing `Sla` section, no defaults in code.** A missing priority fails loudly.
-  Rejected: constants in code and a settings table.
+- **Configuration in the `Sla` section, no defaults in code.** A missing priority fails loudly. Rejected:
+  constants in code and a settings table.
 - **The SLA window is stored next to the due date (`SlaWindowMinutes`).** "At risk" needs the length of the
   window, and escalation restarts it, so it is not always due minus created. Rejected: recomputing it from
   priority and tier (breaks when configuration changes) and a "window start" column. The status itself is
@@ -298,6 +394,13 @@ Migration `AddTicketEscalations`:
 - **A fallback policy instead of `[Authorize]` on controllers.** One place decides; forgetting an attribute
   cannot open an endpoint. Rejected: attributes per controller.
 - **`escalatedBy` from the token, not the body.** Removed from the contract and the UI.
+- **A `Database:MigrateAndSeedOnStartup` switch instead of "Development only".** The container can run as
+  Production (Swagger off, no Development file) and still demo with one command. Rejected: running the
+  container as Development (it would load fixtures and turn Swagger on) and a separate migration job
+  (right for production, too heavy for this brief).
+- **Excluding `appsettings.Development.json` from the published output**, not only from `.dockerignore`:
+  it cannot reach an image however the image is built.
+- **Moving `Sla` into `appsettings.json`.** It is a business setting needed in every environment.
 - **Manual assignment stays an override** that does not apply the specialist rule, as before Task 2.
 
 ## Assumptions (where the spec was open)
@@ -310,15 +413,16 @@ Migration `AddTicketEscalations`:
 - The search text is matched as one phrase, not split into words.
 - All agents share one development password; it is a fixture, not a policy.
 - Email lookup is exact after trimming; case sensitivity follows the database collation.
+- `/health` only needs to say whether the database is reachable.
 
 ---
 
 ## AI usage
 
 **Tool and purpose.** I used Claude (chat) throughout: to explain the codebase, find the root cause of
-DEFECT-117, design the rules, the persistence and the authentication, write code and tests, and draft
-documentation. TODO: rewrite this section in your own words and keep it honest; the points below are what
-happened.
+DEFECT-117, design the rules, the persistence, the authentication and the Docker setup, write code and
+tests, and draft documentation. TODO: rewrite this section in your own words and keep it honest; the points
+below are what happened.
 
 - **A workflow that worked:** splitting each task into small steps (rules, then database, then wiring,
   then UI) with tests before moving on. I ran every test and check myself.
@@ -332,10 +436,11 @@ happened.
   request on every keystroke; my regression tests caught it (2 failures, 1 call expected, 2 and 4
   received). (2) The second version failed the `react-hooks/set-state-in-effect` lint rule, so `isLoading`
   became derived. (3) Edit instructions for `TicketQueries.cs` led me to a duplicated method that did not
-  compile; I replaced the whole file. TODO: add anything you hit in Task 3.
+  compile; I replaced the whole file. TODO: add anything you hit in Tasks 3 and 4.
 - **How generated code was verified:** unit and query tests, the architecture test that compares the model
   with the migration, `typecheck` and `lint`, reading the SQL EF Core logs, checking that the tests fail
-  when the filter is disabled (6 of 7 failed), and manual checks in Swagger and the browser (below).
+  when the filter is disabled (6 of 7 failed), manual checks in Swagger, the browser and the container
+  (below), and listing the container's files to confirm no development settings were inside it.
 
 ### Manual checks I ran
 
@@ -350,7 +455,7 @@ Task 2, in Swagger against SQL Server (before authentication was added):
   an unknown ticket gave 404.
 - TODO (optional): `slaStatus` filter, SLA indicator and escalation panel in the browser.
 
-Task 3, in the browser and Swagger:
+Task 3, in the browser:
 
 - Opening a page signed out redirects to the login page, and signing in returns to the page asked for.
 - A wrong password, an unknown email and the inactive agent all show the same message.
@@ -360,6 +465,8 @@ Task 3, in the browser and Swagger:
 - Escalating a ticket records the signed-in agent's name.
 - TODO: delete any line above that you did not actually run.
 
+Task 4: see "How each was checked" in the Docker section.
+
 ## Known limitations
 
 - **Authentication, the weakest part:** a token stays valid for its 60 minutes even if the agent is
@@ -368,18 +475,21 @@ Task 3, in the browser and Swagger:
   rate limiting on login; there is no registration, password reset or roles (all out of scope). In
   production I would use a short-lived token in an httpOnly cookie, check the agent on each request or keep
   a revocation list, rate-limit login, keep the key in a secret store and never seed a known password.
-- The development signing key and password are fixtures in `appsettings.Development.json`.
-- HTTPS is only the ASP.NET development certificate; no certificate work was done.
-- Swagger cannot call protected endpoints (there is no Authorize button); use the web app.
+- The development signing key and password are fixtures in `appsettings.Development.json`. The Docker demo
+  also seeds a known agent password and uses a demo signing key by default (both overridable in `.env`);
+  only a local demo should run like that.
+- HTTPS is only the ASP.NET development certificate locally and plain HTTP in the container; no
+  certificate work was done.
+- Swagger cannot call protected endpoints (there is no Authorize button) and is off in the container; use
+  the web app.
+- `/health` only checks that the database can be reached, and the image has no Docker `HEALTHCHECK`
+  (the runtime image has no `curl`).
 - The SQL SLA filter and `SlaEvaluator` are two forms of one rule. `DATEDIFF` counts whole seconds, so a
   ticket within one second of the at-risk threshold could be labelled differently by the list and the
   filter.
 - SQLite has no `DATEDIFF`, so AtRisk and WithinSla filters have no automated database test.
 - Two tickets created at the same instant could read the same agent loads and pick the same agent (no
   locking). `NextReferenceAsync` still uses "highest id + 1" (existing behaviour).
-- **Task 4 (Docker) was not done.** It would need: a multi-stage Dockerfile, a non-root user, `/health`,
-  and moving the `Sla` section from `appsettings.Development.json` to `appsettings.json` (it is only
-  loaded in Development today) with `Jwt__SigningKey` and the connection string from environment variables.
 - Optional stretch 2.5 (SLA summary report) was not built.
 
 ## Troubleshooting
@@ -388,12 +498,14 @@ Task 3, in the browser and Swagger:
 | --- | --- |
 | API cannot reach the database | `npm run db:up`, wait about 20 s, check `docker compose ps` |
 | `docker` commands fail with a 500 error | Restart Docker Desktop (`wsl --shutdown`, then reopen it) |
+| `docker compose up --build` is slow the first time | It downloads the .NET SDK and runtime images (about 1 GB); later builds reuse them |
+| The container API exits at startup | `docker compose logs api`; usually `Jwt__SigningKey` shorter than 32 characters |
+| Port 1433 or 5080 already in use | Stop the other process, or change the port mapping in `docker-compose.yml` |
 | API stops at startup with "Jwt:SigningKey must be set" | Run in Development (it has a fixture) or set `Jwt__SigningKey` to 32+ characters |
-| Port 1433 already in use | Change the port in `docker-compose.yml` and `.env` |
 | Browser warns about the certificate | `dotnet dev-certs https --trust`, or use the web app, which proxies |
 | Web app shows "Unable to load tickets" | The API is not running, or `VITE_API_PROXY_TARGET` points at the wrong port |
 | Sent back to the login page after about an hour | The 60-minute token expired; sign in again |
-| Cannot sign in as a seeded agent | Check the password in `appsettings.Development.json`; restart the API so it gives agents their password |
+| Cannot sign in as a seeded agent | Check the password above; restart the API so it gives agents their password |
 | `dotnet test` / `dotnet build` fails with "file is locked" | Stop the running API first |
 | Test DLL blocked by "Application Control policy" (Windows) | Smart App Control blocks unsigned local builds; turn it off or run the tests elsewhere |
 | SQL Server slow on Apple Silicon | Enable Rosetta in Docker Desktop, Settings, General |
@@ -404,6 +516,7 @@ Task 3, in the browser and Swagger:
 | --- | --- |
 | `npm run db:up` / `db:down` / `db:reset` | Start / stop / wipe SQL Server |
 | `npm run api` / `npm run web` | Run the API / the React app |
+| `docker compose up --build` / `down -v` | Run the API in a container with SQL Server / stop and wipe |
 | `npm run build` | Build both |
 | `npm run lint` / `typecheck` / `format` | Web lint and types / `dotnet format` |
 | `npm run ef -- migrations add <Name>` | Add an EF Core migration |
