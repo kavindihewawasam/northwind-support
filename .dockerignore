@@ -1,0 +1,19 @@
+# Build output and dependencies are produced inside the image.
+**/bin/
+**/obj/
+**/node_modules/
+
+# Never part of an image.
+.git/
+.gitignore
+.env
+**/.env
+
+# Not needed to build the API: the web app, tests, docs and tooling.
+apps/web/
+apps/api/tests/
+db/
+spec/
+.github/
+.vscode/
+*.md

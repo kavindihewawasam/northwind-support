@@ -1,5 +1,5 @@
-# SQL Server for local development only. The password below is a throwaway local
-# placeholder - never commit a real credential.
+# Local development and demo. The passwords and keys below are throwaway local placeholders,
+# overridable from .env. Never commit a real credential.
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -22,6 +22,28 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  api:
+    image: supportdesk-api:local
+    container_name: supportdesk-api
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    # Starts only once SQL Server reports healthy.
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${API_ENVIRONMENT:-Production}"
+      # SQL Server is reached by its service name, not localhost.
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=SupportDesk;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Local_Dev_Password1};TrustServerCertificate=True;Encrypt=False"
+      Jwt__SigningKey: "${Jwt__SigningKey:-docker-demo-signing-key-local-only-0123456789abcdef}"
+      # Demo only: on an empty volume the API applies migrations, seeds demo data and gives the
+      # agents this password. A real deployment would do none of this (see the README).
+      Database__MigrateAndSeedOnStartup: "true"
+      Seed__AgentPassword: "${Seed__AgentPassword:-LocalDevOnly!123}"
+    ports:
+      - "5080:8080"
 
 volumes:
   supportdesk-sql:
